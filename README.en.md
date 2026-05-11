@@ -2,6 +2,8 @@
 
 MarkLite is a lightweight Windows Markdown editor created by **Vazone**. It is built for everyday writing, notes, local Markdown file editing, and live preview. The project uses Rust, Tauri 2, Svelte, TypeScript, CodeMirror 6, and pulldown-cmark to deliver a small, fast, and quiet desktop experience on Windows.
 
+![MarkLite interface screenshot](assets/marklite-screenshot.png)
+
 > This is a vibe coding / AI assisted coding open-source project. If any material in this repository unintentionally infringes your rights, please contact Vazone through the GitHub repository. I will review the report and remove or replace the material as soon as possible when appropriate.
 
 ## Keywords
