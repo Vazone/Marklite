@@ -6,6 +6,8 @@ MarkLite is a lightweight Windows Markdown editor by **Vazone**, built with Rust
 
 MarkLite 是由 **Vazone** 发起的轻量级 Windows Markdown 编辑器，适合本地 Markdown 写作、预览、笔记整理和文档管理。
 
+![MarkLite interface screenshot](assets/marklite-screenshot.png)
+
 ## Highlights
 
 - Windows Markdown editor with a small Tauri/Rust desktop footprint
