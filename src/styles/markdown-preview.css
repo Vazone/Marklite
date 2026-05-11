@@ -1,0 +1,135 @@
+.markdown-preview {
+  overflow: auto;
+  padding: 24px min(7vw, 56px);
+  background: var(--panel-bg);
+  color: var(--text-primary);
+}
+
+.markdown-preview > :first-child {
+  margin-top: 0;
+}
+
+.markdown-preview > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-preview h1,
+.markdown-preview h2,
+.markdown-preview h3,
+.markdown-preview h4,
+.markdown-preview h5,
+.markdown-preview h6 {
+  margin: 1.45em 0 0.58em;
+  line-height: 1.25;
+}
+
+.markdown-preview h1 {
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 2rem;
+}
+
+.markdown-preview h2 {
+  padding-bottom: 0.2em;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 1.55rem;
+}
+
+.markdown-preview h3 {
+  font-size: 1.28rem;
+}
+
+.markdown-preview p,
+.markdown-preview ul,
+.markdown-preview ol,
+.markdown-preview blockquote,
+.markdown-preview pre,
+.markdown-preview table {
+  margin: 0 0 1em;
+}
+
+.markdown-preview a {
+  color: var(--accent-color);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.markdown-preview blockquote {
+  margin-left: 0;
+  padding: 8px 16px;
+  border-left: 4px solid var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 8%, transparent);
+  color: var(--text-secondary);
+}
+
+.markdown-preview code {
+  padding: 0.16em 0.34em;
+  border-radius: 5px;
+  background: var(--bg-secondary);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.markdown-preview pre {
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.markdown-preview pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.markdown-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+}
+
+.markdown-preview th,
+.markdown-preview td {
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+}
+
+.markdown-preview th {
+  background: var(--bg-secondary);
+  font-weight: 700;
+}
+
+.markdown-preview img {
+  max-width: 100%;
+  border-radius: var(--radius-md);
+}
+
+.markdown-preview hr {
+  height: 1px;
+  margin: 2em 0;
+  border: 0;
+  background: var(--border-color);
+}
+
+.markdown-preview input[type='checkbox'] {
+  margin-right: 0.5em;
+}
+
+.preview-empty {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.preview-empty h2 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 1.1rem;
+}
+
+.preview-empty p {
+  margin: 6px 0 0;
+}

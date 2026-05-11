@@ -1,0 +1,32 @@
+[package]
+name = "marklite"
+version = "0.1.0"
+description = "A lightweight Windows Markdown editor."
+authors = ["Vazone"]
+license = "MIT"
+repository = "https://github.com/Vazone/Marklite"
+edition = "2021"
+rust-version = "1.80"
+
+[lib]
+name = "marklite_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+ammonia = "4"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+html-escape = "0.2"
+pulldown-cmark = "0.13.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

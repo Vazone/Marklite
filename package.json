@@ -1,0 +1,57 @@
+{
+  "name": "marklite",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A lightweight Windows Markdown editor built with Tauri, Rust, Svelte and CodeMirror.",
+  "author": "Vazone",
+  "license": "MIT",
+  "homepage": "https://github.com/Vazone/Marklite",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vazone/Marklite.git"
+  },
+  "keywords": [
+    "markdown",
+    "markdown-editor",
+    "windows",
+    "tauri",
+    "rust",
+    "svelte",
+    "codemirror",
+    "marklite",
+    "desktop-app",
+    "notes"
+  ],
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 1420",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "package:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-windows-installer.ps1",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.18.7",
+    "@codemirror/commands": "^6.10.0",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.11.3",
+    "@codemirror/search": "^6.5.11",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.38.6",
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@tauri-apps/plugin-opener": "^2.5.4",
+    "lucide-svelte": "^1.0.1",
+    "svelte": "^5.55.5"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@tauri-apps/cli": "^2.11.1",
+    "@tsconfig/svelte": "^5.0.5",
+    "@types/node": "^25.0.0",
+    "esbuild": "^0.27.2",
+    "svelte-check": "^4.3.4",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.12"
+  }
+}
