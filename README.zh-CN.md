@@ -4,6 +4,10 @@ MarkLite 是由 **Vazone** 发起的轻量级 Windows Markdown 编辑器，面�
 
 ![MarkLite 界面截图](assets/marklite-screenshot.png)
 
+## 下载
+
+从 [MarkLite v0.1.0 Releases](https://github.com/Vazone/Marklite/releases/tag/v0.1.0) 下载 Windows 安装程序。
+
 > If any repository material infringes your rights, please contact the author through GitHub so it can be reviewed and removed or replaced.
 
 ## 关键词
