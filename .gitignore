@@ -1,7 +1,9 @@
 node_modules/
 dist/
+release/
 src-tauri/target/
 src-tauri/gen/
+MarkLite_Rust_Windows_Markdown_Editor_开发大纲.md
 *.log
 *.tmp
 .DS_Store
