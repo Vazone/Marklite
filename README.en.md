@@ -4,6 +4,10 @@ MarkLite is a lightweight Windows Markdown editor created by **Vazone**. It is b
 
 ![MarkLite interface screenshot](assets/marklite-screenshot.png)
 
+## Download
+
+Download the Windows installer from [MarkLite v0.1.0 Releases](https://github.com/Vazone/Marklite/releases/tag/v0.1.0).
+
 > This is a vibe coding / AI assisted coding open-source project. If any material in this repository unintentionally infringes your rights, please contact Vazone through the GitHub repository. I will review the report and remove or replace the material as soon as possible when appropriate.
 
 ## Keywords

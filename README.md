@@ -8,6 +8,10 @@ MarkLite 是由 **Vazone** 发起的轻量级 Windows Markdown 编辑器，适�
 
 ![MarkLite interface screenshot](assets/marklite-screenshot.png)
 
+## Download
+
+Download the Windows installer from [MarkLite v0.1.0 Releases](https://github.com/Vazone/Marklite/releases/tag/v0.1.0).
+
 ## Highlights
 
 - Windows Markdown editor with a small Tauri/Rust desktop footprint
