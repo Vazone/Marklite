@@ -2,9 +2,19 @@
   import type { AppSettings } from '../../lib/tauriApi';
   import { openExternalLink } from '../../lib/tauriApi';
   import { uiActions } from '../../app/stores/uiStore';
+  import type { EditorScrollPosition } from '../../app/stores/documentStore';
 
   export let html = '';
   export let settings: AppSettings;
+
+  let previewHost: HTMLElement;
+
+  export function syncToEditorScroll(position: EditorScrollPosition | undefined) {
+    if (!settings.syncScroll || !previewHost || !position) return;
+
+    const maxScroll = Math.max(0, previewHost.scrollHeight - previewHost.clientHeight);
+    previewHost.scrollTop = maxScroll * Math.min(1, Math.max(0, position.ratio));
+  }
 
   async function handleClick(event: MouseEvent) {
     const target = event.target as HTMLElement | null;
@@ -30,6 +40,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 <section
+  bind:this={previewHost}
   class="preview markdown-preview"
   style:font-family={settings.previewFontFamily}
   style:font-size={`${settings.previewFontSize}px`}

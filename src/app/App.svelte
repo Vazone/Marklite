@@ -10,7 +10,7 @@
   import CommandPalette from '../components/layout/CommandPalette.svelte';
   import SettingsDialog from '../components/dialogs/SettingsDialog.svelte';
   import AboutDialog from '../components/dialogs/AboutDialog.svelte';
-  import { activeTab, documentStore, getActiveTab, type CursorPosition, type EditorTab } from './stores/documentStore';
+  import { activeTab, documentStore, getActiveTab, type CursorPosition, type EditorScrollPosition, type EditorTab } from './stores/documentStore';
   import { settingsStore } from './stores/settingsStore';
   import { uiActions, uiStore, type LayoutMode } from './stores/uiStore';
   import {
@@ -28,6 +28,7 @@
   import type { CommandItem } from '../lib/commands';
 
   let editorRef: any;
+  let previewRef: any;
   let recentFiles: RecentFileDto[] = [];
   let renderTimer: number | undefined;
   let autosaveTimer: number | undefined;
@@ -181,6 +182,10 @@
     try {
       const rendered = await api.renderMarkdown(content);
       documentStore.updateRendered(tabId, rendered);
+      if (tabId === getActiveTab()?.id && $settingsStore.syncScroll) {
+        const position = getActiveTab()?.scrollPosition;
+        window.setTimeout(() => previewRef?.syncToEditorScroll(position), 0);
+      }
     } catch (error) {
       uiActions.toast(toAppError(error).message, 'error');
     }
@@ -294,6 +299,13 @@
     documentStore.updateActiveCursor(position);
   }
 
+  function handleEditorScroll(position: EditorScrollPosition) {
+    documentStore.updateActiveScroll(position);
+    if ($settingsStore.syncScroll && $uiStore.layoutMode !== 'edit') {
+      previewRef?.syncToEditorScroll(position);
+    }
+  }
+
   function applyToolbar(action: ToolbarAction) {
     editorRef?.applyMarkdown(action);
   }
@@ -362,9 +374,12 @@
       event.preventDefault();
       const tab = getActiveTab();
       if (tab) void closeTab(tab);
-    } else if (key === 'f' || key === 'h') {
+    } else if (key === 'f') {
       event.preventDefault();
       editorRef?.openFind();
+    } else if (key === 'h') {
+      event.preventDefault();
+      editorRef?.openReplace();
     }
   }
 
@@ -470,13 +485,14 @@
               settings={$settingsStore}
               onChange={handleContentChange}
               onCursorChange={handleCursorChange}
+              onScrollSync={handleEditorScroll}
             />
           {/key}
         </section>
       {/if}
 
       {#if $activeTab && ($uiStore.layoutMode === 'preview' || $uiStore.layoutMode === 'split')}
-        <PreviewPane html={$activeTab.html} settings={$settingsStore} />
+        <PreviewPane bind:this={previewRef} html={$activeTab.html} settings={$settingsStore} />
       {/if}
     </main>
   </div>

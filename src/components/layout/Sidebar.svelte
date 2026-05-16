@@ -22,6 +22,9 @@
 
   let contextMenu: RecentContextMenu | null = null;
 
+  $: currentLine = tab?.scrollPosition.line ?? tab?.cursorPosition.line ?? 1;
+  $: currentOutline = tab?.outline.filter((item) => item.line <= currentLine).at(-1);
+
   onMount(() => {
     const close = () => {
       contextMenu = null;
@@ -53,6 +56,10 @@
     if (!contextMenu) return;
     onRevealRecent(contextMenu.path);
     contextMenu = null;
+  }
+
+  function isCurrentOutline(line: number) {
+    return currentOutline?.line === line;
   }
 </script>
 
@@ -102,6 +109,7 @@
             <button
               type="button"
               class="outline-item"
+              class:current={isCurrentOutline(item.line)}
               style:padding-left={`${8 + (item.level - 1) * 14}px`}
               on:click={() => onJumpToLine(item.line)}
             >
@@ -120,6 +128,7 @@
       <dl class="info-list">
         <div><dt>文件名</dt><dd>{tab?.title ?? 'Untitled.md'}</dd></div>
         <div><dt>路径</dt><dd>{tab?.path ?? '未保存'}</dd></div>
+        <div><dt>当前位置</dt><dd>{currentOutline ? `${currentOutline.title}（第 ${currentLine} 行）` : `第 ${currentLine} 行`}</dd></div>
         <div><dt>大小</dt><dd>{tab?.fileSize ? `${(tab.fileSize / 1024).toFixed(1)} KB` : '-'}</dd></div>
         <div><dt>最后保存</dt><dd>{tab?.lastSavedAt ? new Date(tab.lastSavedAt).toLocaleString() : '-'}</dd></div>
         <div><dt>词数</dt><dd>{tab?.stats.wordCount ?? 0}</dd></div>

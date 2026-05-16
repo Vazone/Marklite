@@ -6,6 +6,15 @@ export type CursorPosition = {
   column: number;
 };
 
+export type EditorScrollPosition = {
+  line: number;
+  ratio: number;
+  totalLines: number;
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+};
+
 export type EditorTab = {
   id: string;
   path: string | null;
@@ -16,6 +25,7 @@ export type EditorTab = {
   lastSavedAt: string | null;
   fileSize: number | null;
   cursorPosition: CursorPosition;
+  scrollPosition: EditorScrollPosition;
   html: string;
   outline: OutlineItem[];
   stats: DocumentStats;
@@ -68,6 +78,7 @@ function createTab(document: CreateTabInput = {}): EditorTab {
     lastSavedAt: document.lastSavedAt ?? null,
     fileSize: document.fileSize ?? null,
     cursorPosition: { line: 1, column: 1 },
+    scrollPosition: { line: 1, ratio: 0, totalLines: 1, scrollTop: 0, scrollHeight: 0, clientHeight: 0 },
     html: '',
     outline: [],
     stats: {
@@ -172,6 +183,12 @@ function createDocumentStore() {
       store.update((state) => ({
         ...state,
         tabs: state.tabs.map((tab) => (tab.id === state.activeTabId ? { ...tab, cursorPosition } : tab))
+      }));
+    },
+    updateActiveScroll(scrollPosition: EditorScrollPosition) {
+      store.update((state) => ({
+        ...state,
+        tabs: state.tabs.map((tab) => (tab.id === state.activeTabId ? { ...tab, scrollPosition } : tab))
       }));
     },
     updateRendered(tabId: string, rendered: RenderedMarkdownDto) {
