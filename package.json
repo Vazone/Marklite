@@ -1,6 +1,6 @@
 {
   "name": "marklite",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "A lightweight Windows Markdown editor built with Tauri, Rust, Svelte and CodeMirror.",
   "author": "Vazone",

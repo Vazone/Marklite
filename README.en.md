@@ -6,7 +6,7 @@ MarkLite is a lightweight Windows Markdown editor created by **Vazone**. It is b
 
 ## Download
 
-Download the Windows installer from [MarkLite v0.1.0 Releases](https://github.com/Vazone/Marklite/releases/tag/v0.1.0).
+Download the Windows installer from [MarkLite v0.1.1 Releases](https://github.com/Vazone/Marklite/releases/tag/v0.1.1).
 
 > This is a vibe coding / AI assisted coding open-source project. If any material in this repository unintentionally infringes your rights, please contact Vazone through the GitHub repository. I will review the report and remove or replace the material as soon as possible when appropriate.
 
@@ -91,7 +91,7 @@ This creates an NSIS installer with MarkLite Windows integration options:
 Output:
 
 ```text
-src-tauri/target/release/bundle/nsis/MarkLite_0.1.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/MarkLite_0.1.1_x64-setup.exe
 ```
 
 ## License
