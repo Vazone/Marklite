@@ -26,9 +26,9 @@
   import { markdown } from '@codemirror/lang-markdown';
   import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
   import { highlightSelectionMatches } from '@codemirror/search';
-  import { ChevronDown, ChevronUp, Search, X } from 'lucide-svelte';
+  import { ChevronDown, ChevronRight, ChevronUp, Replace, ReplaceAll, Search, X } from 'lucide-svelte';
   import type { AppSettings } from '../../lib/tauriApi';
-  import type { CursorPosition } from '../../app/stores/documentStore';
+  import type { CursorPosition, EditorScrollPosition } from '../../app/stores/documentStore';
   import type { ToolbarAction } from '../../lib/markdownToolbar';
 
   type SearchMatch = {
@@ -54,6 +54,7 @@
   export let settings: AppSettings;
   export let onChange: (value: string) => void = () => {};
   export let onCursorChange: (position: CursorPosition) => void = () => {};
+  export let onScrollSync: (position: EditorScrollPosition) => void = () => {};
 
   let host: HTMLDivElement;
   let view: EditorView | null = null;
@@ -61,12 +62,18 @@
   let lastSettingsSignature = '';
   let searchOpen = false;
   let searchQuery = '';
+  let replaceExpanded = false;
+  let replaceValue = '';
   let searchInput: HTMLInputElement | null = null;
+  let replaceInput: HTMLInputElement | null = null;
   let searchMatches: SearchMatch[] = [];
   let activeMatchIndex = -1;
+  let scrollFrame = 0;
+  let removeScrollListener: (() => void) | null = null;
   const optionsCompartment = new Compartment();
 
   $: matchCounter = searchQuery ? `${searchMatches.length ? activeMatchIndex + 1 : 0}/${searchMatches.length}` : '0/0';
+  $: canReplace = searchQuery.trim().length > 0 && searchMatches.length > 0;
 
   onMount(() => {
     const state = EditorState.create({
@@ -88,7 +95,7 @@
           { key: 'Mod-i', run: () => runToolbar('italic') },
           { key: 'Mod-k', run: () => runToolbar('link') },
           { key: 'Mod-f', run: () => openFindFromKeymap() },
-          { key: 'Mod-h', run: () => openFindFromKeymap() },
+          { key: 'Mod-h', run: () => openReplaceFromKeymap() },
           ...defaultKeymap,
           ...historyKeymap,
           ...foldKeymap,
@@ -103,10 +110,15 @@
       state,
       parent: host
     });
+    view.scrollDOM.addEventListener('scroll', scheduleScrollSync, { passive: true });
+    removeScrollListener = () => view?.scrollDOM.removeEventListener('scroll', scheduleScrollSync);
+    emitScrollSync();
     lastSettingsSignature = settingsSignature(settings);
   });
 
   onDestroy(() => {
+    removeScrollListener?.();
+    if (scrollFrame) window.cancelAnimationFrame(scrollFrame);
     view?.destroy();
     view = null;
   });
@@ -135,6 +147,8 @@
       if (searchOpen) {
         refreshSearchMatches({ keepActiveNearSelection: true, selectActive: false });
       }
+
+      scheduleScrollSync();
     }
 
     if (update.docChanged || update.selectionSet) {
@@ -145,6 +159,32 @@
         column: head - line.from + 1
       });
     }
+  }
+
+  function scheduleScrollSync() {
+    if (scrollFrame) return;
+    scrollFrame = window.requestAnimationFrame(() => {
+      scrollFrame = 0;
+      emitScrollSync();
+    });
+  }
+
+  function emitScrollSync() {
+    if (!view) return;
+    const scroller = view.scrollDOM;
+    const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    const ratio = maxScroll > 0 ? scroller.scrollTop / maxScroll : 0;
+    const lineBlock = view.lineBlockAtHeight(scroller.scrollTop + 1);
+    const line = view.state.doc.lineAt(lineBlock.from).number;
+
+    onScrollSync({
+      line,
+      ratio: Math.min(1, Math.max(0, ratio)),
+      totalLines: view.state.doc.lines,
+      scrollTop: scroller.scrollTop,
+      scrollHeight: scroller.scrollHeight,
+      clientHeight: scroller.clientHeight
+    });
   }
 
   function optionExtensions() {
@@ -177,17 +217,17 @@
           borderRight: '1px solid var(--border-color)'
         },
         '.cm-activeLine': {
-          backgroundColor: 'var(--active-line-bg)'
+          backgroundColor: 'color-mix(in srgb, var(--active-line-bg) 62%, transparent)'
         },
         '.cm-activeLineGutter': {
-          backgroundColor: 'var(--active-line-bg)',
+          backgroundColor: 'color-mix(in srgb, var(--active-line-bg) 62%, transparent)',
           color: 'var(--text-primary)'
         },
         '.cm-selectionLayer .cm-selectionBackground, &.cm-focused .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
-          backgroundColor: 'var(--selection-bg) !important'
+          backgroundColor: 'color-mix(in srgb, var(--selection-bg) 88%, transparent) !important'
         },
         '.cm-content ::selection': {
-          backgroundColor: 'var(--selection-bg)'
+          backgroundColor: 'color-mix(in srgb, var(--selection-bg) 88%, transparent)'
         },
         '&.cm-focused': {
           outline: 'none'
@@ -295,8 +335,18 @@
     });
   }
 
+  export function openReplace() {
+    openFind();
+    replaceExpanded = true;
+  }
+
   function openFindFromKeymap(): boolean {
     openFind();
+    return true;
+  }
+
+  function openReplaceFromKeymap(): boolean {
+    openReplace();
     return true;
   }
 
@@ -306,6 +356,18 @@
     activeMatchIndex = -1;
     updateSearchDecorations();
     view?.focus();
+  }
+
+  function toggleReplaceExpanded() {
+    replaceExpanded = !replaceExpanded;
+    if (replaceExpanded) {
+      void tick().then(() => {
+        replaceInput?.focus();
+        replaceInput?.select();
+      });
+    } else {
+      void tick().then(() => searchInput?.focus());
+    }
   }
 
   function selectedSearchText(): string {
@@ -338,10 +400,73 @@
     }
   }
 
+  function handleReplaceInput(event: Event) {
+    replaceValue = (event.currentTarget as HTMLInputElement).value;
+  }
+
+  function handleReplaceKeydown(event: KeyboardEvent) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (event.ctrlKey || event.metaKey) {
+        replaceAllMatches();
+      } else {
+        replaceCurrentMatch();
+      }
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      closeFind();
+    }
+  }
+
   function moveSearchMatch(direction: 1 | -1) {
     if (!searchMatches.length) return;
     activeMatchIndex = (activeMatchIndex + direction + searchMatches.length) % searchMatches.length;
     selectActiveMatch();
+  }
+
+  function replaceCurrentMatch() {
+    if (!view || !canReplace) return;
+
+    const match = searchMatches[activeMatchIndex];
+    if (!match) return;
+
+    const nextSearchAnchor = match.from + replaceValue.length;
+    view.dispatch({
+      changes: { from: match.from, to: match.to, insert: replaceValue },
+      selection: EditorSelection.cursor(nextSearchAnchor)
+    });
+
+    searchMatches = findSearchMatches(view.state.doc.toString(), searchQuery);
+    if (!searchMatches.length) {
+      activeMatchIndex = -1;
+      updateSearchDecorations();
+      void tick().then(() => replaceInput?.focus());
+      return;
+    }
+
+    activeMatchIndex = firstMatchIndexAtOrAfter(nextSearchAnchor);
+    selectActiveMatch('replace');
+  }
+
+  function replaceAllMatches() {
+    if (!view || !canReplace) return;
+
+    const matches = [...searchMatches];
+    const anchor = matches[0]?.from ?? 0;
+    view.dispatch({
+      changes: matches.map((match) => ({ from: match.from, to: match.to, insert: replaceValue })),
+      selection: EditorSelection.cursor(anchor + replaceValue.length)
+    });
+
+    searchMatches = findSearchMatches(view.state.doc.toString(), searchQuery);
+    activeMatchIndex = searchMatches.length ? firstMatchIndexAtOrAfter(anchor + replaceValue.length) : -1;
+
+    if (searchMatches.length) {
+      selectActiveMatch('replace');
+    } else {
+      updateSearchDecorations();
+      void tick().then(() => replaceInput?.focus());
+    }
   }
 
   function refreshSearchMatches(options: { keepActiveNearSelection?: boolean; selectActive?: boolean } = {}) {
@@ -393,7 +518,13 @@
     return matches;
   }
 
-  function selectActiveMatch() {
+  function firstMatchIndexAtOrAfter(position: number): number {
+    if (!searchMatches.length) return -1;
+    const index = searchMatches.findIndex((match) => match.from >= position);
+    return index >= 0 ? index : 0;
+  }
+
+  function selectActiveMatch(focusTarget: 'search' | 'replace' = 'search') {
     if (!view) return;
     const match = searchMatches[activeMatchIndex];
     if (!match) {
@@ -410,7 +541,11 @@
     });
 
     window.requestAnimationFrame(() => {
-      searchInput?.focus();
+      if (focusTarget === 'replace') {
+        replaceInput?.focus();
+      } else {
+        searchInput?.focus();
+      }
     });
   }
 
@@ -512,29 +647,69 @@
   <div class="editor-host" bind:this={host}></div>
 
   {#if searchOpen}
-    <form class="find-popover" role="search" on:submit|preventDefault={() => moveSearchMatch(1)}>
-      <label class="find-input-shell" aria-label="搜索文档">
-        <Search size={15} />
-        <input
-          bind:this={searchInput}
-          value={searchQuery}
-          placeholder="搜索文档"
-          spellcheck="false"
-          on:input={handleSearchInput}
-          on:keydown={handleSearchKeydown}
-        />
-        <span class:empty={!searchMatches.length}>{matchCounter}</span>
-      </label>
+    <form class="find-popover" class:replace-expanded={replaceExpanded} role="search" on:submit|preventDefault={() => moveSearchMatch(1)}>
+      <div class="find-row">
+        <button
+          type="button"
+          class="find-icon-button replace-toggle"
+          class:expanded={replaceExpanded}
+          title={replaceExpanded ? '收起替换' : '展开替换'}
+          aria-label={replaceExpanded ? '收起替换' : '展开替换'}
+          aria-expanded={replaceExpanded}
+          on:click={toggleReplaceExpanded}
+        >
+          <span class="replace-toggle-icon">
+            <ChevronRight size={16} />
+          </span>
+        </button>
 
-      <button type="button" class="find-icon-button" title="上一个" disabled={!searchMatches.length} on:click={() => moveSearchMatch(-1)}>
-        <ChevronUp size={16} />
-      </button>
-      <button type="button" class="find-icon-button" title="下一个" disabled={!searchMatches.length} on:click={() => moveSearchMatch(1)}>
-        <ChevronDown size={16} />
-      </button>
-      <button type="button" class="find-icon-button" title="关闭" on:click={closeFind}>
-        <X size={16} />
-      </button>
+        <label class="find-input-shell" aria-label="搜索文档">
+          <Search size={15} />
+          <input
+            bind:this={searchInput}
+            value={searchQuery}
+            placeholder="搜索文档"
+            spellcheck="false"
+            on:input={handleSearchInput}
+            on:keydown={handleSearchKeydown}
+          />
+          <span class:empty={!searchMatches.length}>{matchCounter}</span>
+        </label>
+
+        <button type="button" class="find-icon-button" title="上一个" disabled={!searchMatches.length} on:click={() => moveSearchMatch(-1)}>
+          <ChevronUp size={16} />
+        </button>
+        <button type="button" class="find-icon-button" title="下一个" disabled={!searchMatches.length} on:click={() => moveSearchMatch(1)}>
+          <ChevronDown size={16} />
+        </button>
+        <button type="button" class="find-icon-button" title="关闭" on:click={closeFind}>
+          <X size={16} />
+        </button>
+      </div>
+
+      {#if replaceExpanded}
+        <div class="replace-row">
+          <span class="replace-row-spacer" aria-hidden="true"></span>
+          <label class="replace-input-shell" aria-label="替换为">
+            <Replace size={15} />
+            <input
+              bind:this={replaceInput}
+              value={replaceValue}
+              placeholder="替换为"
+              spellcheck="false"
+              on:input={handleReplaceInput}
+              on:keydown={handleReplaceKeydown}
+            />
+          </label>
+          <button type="button" class="find-icon-button" title="替换当前" disabled={!canReplace} on:click={replaceCurrentMatch}>
+            <Replace size={16} />
+          </button>
+          <button type="button" class="find-icon-button" title="全部替换" disabled={!canReplace} on:click={replaceAllMatches}>
+            <ReplaceAll size={16} />
+          </button>
+          <span class="replace-row-spacer" aria-hidden="true"></span>
+        </div>
+      {/if}
     </form>
   {/if}
 </div>
@@ -551,10 +726,9 @@
     top: 144px;
     right: 18px;
     z-index: 20;
-    display: flex;
-    align-items: center;
+    display: grid;
     gap: 6px;
-    max-width: min(520px, calc(100% - 32px));
+    width: min(540px, calc(100% - 36px));
     padding: 6px;
     border: 1px solid var(--border-color);
     border-radius: calc(var(--radius-md) + 2px);
@@ -563,13 +737,36 @@
     backdrop-filter: blur(16px);
   }
 
+  .find-row,
+  .replace-row {
+    display: grid;
+    grid-template-columns: 30px minmax(180px, 1fr) 32px 32px 32px;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
   .find-input-shell {
     display: grid;
-    grid-template-columns: 18px minmax(110px, 240px) auto;
+    grid-template-columns: 18px minmax(110px, 1fr) auto;
     align-items: center;
     gap: 7px;
     height: 32px;
-    min-width: min(310px, calc(100vw - 190px));
+    min-width: 0;
+    padding: 0 9px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--input-bg);
+    color: var(--text-muted);
+  }
+
+  .replace-input-shell {
+    display: grid;
+    grid-template-columns: 18px minmax(110px, 1fr);
+    align-items: center;
+    gap: 7px;
+    height: 32px;
+    min-width: 0;
     padding: 0 9px;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
@@ -578,6 +775,16 @@
   }
 
   .find-input-shell input {
+    min-width: 0;
+    width: 100%;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 0.86rem;
+  }
+
+  .replace-input-shell input {
     min-width: 0;
     width: 100%;
     border: 0;
@@ -610,6 +817,22 @@
     cursor: pointer;
   }
 
+  .replace-toggle-icon {
+    display: grid;
+    place-items: center;
+    transition: transform 130ms ease;
+  }
+
+  .replace-toggle.expanded .replace-toggle-icon {
+    transform: rotate(90deg);
+  }
+
+  .replace-row-spacer {
+    display: block;
+    width: 30px;
+    height: 1px;
+  }
+
   .find-icon-button:hover:not(:disabled) {
     background: var(--bg-secondary);
     color: var(--text-primary);
@@ -624,12 +847,12 @@
     .find-popover {
       left: 12px;
       right: 12px;
-      max-width: none;
+      width: auto;
     }
 
-    .find-input-shell {
-      min-width: 0;
-      flex: 1;
+    .find-row,
+    .replace-row {
+      grid-template-columns: 28px minmax(0, 1fr) 30px 30px 30px;
     }
   }
 </style>

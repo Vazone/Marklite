@@ -320,6 +320,11 @@ button {
   background: var(--bg-secondary);
 }
 
+.outline-item.current {
+  background: color-mix(in srgb, var(--accent-color) 13%, transparent);
+  color: var(--text-primary);
+}
+
 .recent-main span {
   min-width: 0;
 }
