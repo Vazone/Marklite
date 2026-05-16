@@ -34,6 +34,7 @@
   let autosaveKey = '';
   let lastRenderKey = '';
   let unlistenDrop: (() => void) | undefined;
+  let unlistenSingleInstance: (() => void) | undefined;
 
   $: currentTitle = $activeTab?.title ?? 'Untitled.md';
   $: effectiveSidebarVisible = $uiStore.sidebarVisible && $settingsStore.showSidebar;
@@ -89,6 +90,7 @@
       window.removeEventListener('keydown', keyHandler);
       window.removeEventListener('beforeunload', beforeUnload);
       unlistenDrop?.();
+      unlistenSingleInstance?.();
     };
   });
 
@@ -102,6 +104,7 @@
     const settings = get(settingsStore);
     uiActions.setSidebarVisible(settings.showSidebar);
     await refreshRecentFiles();
+    await setupExternalOpenListener();
     await openStartupFile();
     await renderActiveNow();
     await setupDragDrop();
@@ -131,6 +134,20 @@
       });
     } catch (error) {
       console.warn('Failed to register drag drop handler', error);
+    }
+  }
+
+  async function setupExternalOpenListener() {
+    if (!isTauriRuntime()) return;
+
+    try {
+      unlistenSingleInstance = await getCurrentWindow().listen<string>('single-instance-open-file', (event) => {
+        if (event.payload) {
+          void openPath(event.payload);
+        }
+      });
+    } catch (error) {
+      console.warn('Failed to register external open listener', error);
     }
   }
 
@@ -296,6 +313,14 @@
     }
   }
 
+  async function revealRecent(path: string) {
+    try {
+      await api.showInFileManager(path);
+    } catch (error) {
+      uiActions.toast(toAppError(error).message, 'error');
+    }
+  }
+
   async function saveSettings(settings: AppSettings) {
     await settingsStore.save(settings);
     uiActions.setSidebarVisible(settings.showSidebar);
@@ -393,7 +418,9 @@
     {#each $documentStore.tabs as tab}
       <button type="button" class:active={tab.id === $documentStore.activeTabId} on:click={() => documentStore.setActive(tab.id)}>
         <span class:dirty-dot={tab.isDirty}></span>
-        {tab.title}
+        <span class="tab-title" class:long-title={tab.title.length > 18}>
+          <span>{tab.title}</span>
+        </span>
         <span
           class="tab-close"
           role="button"
@@ -428,6 +455,7 @@
         onTabChange={uiActions.setSidebarTab}
         onOpenRecent={(path) => void openPath(path)}
         onRemoveRecent={(path) => void removeRecent(path)}
+        onRevealRecent={(path) => void revealRecent(path)}
         onJumpToLine={jumpToLine}
       />
     {/if}

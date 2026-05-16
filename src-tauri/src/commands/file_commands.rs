@@ -1,4 +1,4 @@
-use std::{env, fs, path::PathBuf};
+use std::{env, fs, path::PathBuf, process::Command};
 
 use crate::{
     models::{
@@ -50,4 +50,27 @@ pub fn get_startup_file_arg() -> Result<Option<String>, AppError> {
     }
 
     Ok(None)
+}
+
+#[tauri::command]
+pub fn show_in_file_manager(path: String) -> Result<(), AppError> {
+    let path_buf = PathBuf::from(&path);
+    let explorer_target = if path_buf.exists() {
+        if path_buf.is_file() {
+            format!("/select,{}", path_buf.to_string_lossy())
+        } else {
+            path_buf.to_string_lossy().to_string()
+        }
+    } else if let Some(parent) = path_buf.parent().filter(|parent| parent.exists()) {
+        parent.to_string_lossy().to_string()
+    } else {
+        return Err(AppError::file_not_found(&path));
+    };
+
+    Command::new("explorer.exe")
+        .arg(explorer_target)
+        .spawn()
+        .map_err(|err| AppError::new("OPEN_FILE_MANAGER_FAILED", format!("打开文件管理器失败：{err}")))?;
+
+    Ok(())
 }
