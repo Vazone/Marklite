@@ -5,6 +5,8 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path "$PSScriptRoot\.."
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+$tauriConfig = Get-Content -Raw (Join-Path $root "src-tauri\tauri.conf.json") | ConvertFrom-Json
+$version = $tauriConfig.version
 
 Push-Location $root
 try {
@@ -38,7 +40,7 @@ try {
 
   $bundleDir = Join-Path $root "src-tauri\target\release\bundle\nsis"
   New-Item -ItemType Directory -Force -Path $bundleDir | Out-Null
-  $final = Join-Path $bundleDir "MarkLite_0.1.0_x64-setup.exe"
+  $final = Join-Path $bundleDir "MarkLite_$($version)_x64-setup.exe"
   Copy-Item -LiteralPath $output -Destination $final -Force
   Write-Host "Custom installer created: $final"
 } finally {

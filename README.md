@@ -10,7 +10,7 @@ MarkLite 是由 **Vazone** 发起的轻量级 Windows Markdown 编辑器，适�
 
 ## Download
 
-Download the Windows installer from [MarkLite v0.1.0 Releases](https://github.com/Vazone/Marklite/releases/tag/v0.1.0).
+Download the Windows installer from [MarkLite v0.1.1 Releases](https://github.com/Vazone/Marklite/releases/tag/v0.1.1).
 
 ## Highlights
 
@@ -38,7 +38,7 @@ npm run package:windows
 Output:
 
 ```text
-src-tauri/target/release/bundle/nsis/MarkLite_0.1.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/MarkLite_0.1.1_x64-setup.exe
 ```
 
 ## License
