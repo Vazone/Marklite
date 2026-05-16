@@ -194,7 +194,8 @@ export const api = {
   resetSettings: () => invokeCommand<AppSettings>('reset_settings'),
   getRecentFiles: () => invokeCommand<RecentFileDto[]>('get_recent_files'),
   removeRecentFile: (path: string) => invokeCommand<RecentFileDto[]>('remove_recent_file', { path }),
-  clearMissingRecentFiles: () => invokeCommand<RecentFileDto[]>('clear_missing_recent_files')
+  clearMissingRecentFiles: () => invokeCommand<RecentFileDto[]>('clear_missing_recent_files'),
+  showInFileManager: (path: string) => invokeCommand<void>('show_in_file_manager', { path })
 };
 
 function browserFallback<T>(command: string, args?: Record<string, unknown>): Promise<T> {
