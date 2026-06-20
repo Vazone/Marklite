@@ -208,8 +208,13 @@
         },
         '.cm-content': {
           padding: '18px 20px',
-          caretColor: 'var(--accent-color)',
+          caretColor: 'var(--editor-caret-color)',
           minHeight: '100%'
+        },
+        '.cm-cursor, .cm-dropCursor': {
+          borderLeft: '2.5px solid var(--editor-caret-color) !important',
+          boxShadow: '0 0 7px var(--editor-caret-glow)',
+          marginLeft: '-1px'
         },
         '.cm-gutters': {
           background: 'var(--editor-bg)',

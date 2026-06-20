@@ -13,6 +13,8 @@
   --border-strong: #c8d1c8;
   --accent-color: #0f8b8d;
   --accent-contrast: #ffffff;
+  --editor-caret-color: #1f2328;
+  --editor-caret-glow: rgb(31 35 40 / 24%);
   --active-line-bg: #eef7f5;
   --selection-bg: #8edfd5;
   --danger-color: #b42318;
@@ -36,6 +38,8 @@
   --border-strong: #465044;
   --accent-color: #27c2b8;
   --accent-contrast: #071a18;
+  --editor-caret-color: #ffffff;
+  --editor-caret-glow: rgb(255 255 255 / 42%);
   --active-line-bg: #25342f;
   --selection-bg: #1f8178;
   --danger-color: #ff8a80;
