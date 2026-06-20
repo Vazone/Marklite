@@ -6,6 +6,10 @@ $ErrorActionPreference = "Stop"
 $InstallerScript = (Resolve-Path $InstallerScript).Path
 $content = Get-Content -Raw -Encoding UTF8 $InstallerScript
 
+function Decode-Utf8Base64([string]$Value) {
+  [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($Value))
+}
+
 if ($content.Contains("MARKLITE_INTEGRATION_PATCH")) {
   Write-Host "NSIS installer already contains MarkLite integration options."
   exit 0
@@ -22,6 +26,10 @@ Var RegisterContextMenuCheckboxState
 Var RegisterDefaultMarkdownCheckbox
 Var RegisterDefaultMarkdownCheckboxState
 '@
+
+$integrationLabel = Decode-Utf8Base64 "Q2hvb3NlIFdpbmRvd3MgaW50ZWdyYXRpb24gb3B0aW9ucyBmb3IgTWFya0xpdGUuIC8g6YCJ5oupIE1hcmtMaXRlIOeahCBXaW5kb3dzIOmbhuaIkOmAiemhueOAgg=="
+$contextMenuLabel = Decode-Utf8Base64 "QWRkIE9wZW4gd2l0aCBNYXJrTGl0ZSB0byB0aGUgcmlnaHQtY2xpY2sgbWVudSBmb3IgLm1kLCAubWFya2Rvd24gYW5kIC50eHQgZmlsZXMuIC8g5re75Yqg5Yiw5Y+z6ZSu6I+c5Y2V"
+$defaultMarkdownLabel = Decode-Utf8Base64 "U2V0IE1hcmtMaXRlIGFzIHRoZSBkZWZhdWx0IGFwcCBmb3IgTWFya2Rvd24gZmlsZXMgKC5tZCwgLm1hcmtkb3duKS4gV2luZG93cyBtYXkgc3RpbGwgYXNrIGZvciBjb25maXJtYXRpb24gaW4gRGVmYXVsdCBBcHBzLiAvIOiuvuS4uiBNYXJrZG93biDpu5jorqTmiZPlvIDmlrnlvI8="
 
 $pagePatch = @'
 ; MarkLite Windows integration page
@@ -43,14 +51,14 @@ Function PageMarkLiteIntegrations
     Abort
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 0 100% 32u "Choose Windows integration options for MarkLite. / 选择 MarkLite 的 Windows 集成选项。"
+  ${NSD_CreateLabel} 0 0 100% 32u "__MARKLITE_INTEGRATION_LABEL__"
   Pop $1
 
-  ${NSD_CreateCheckbox} 0 42u 100% 18u "Add 'Open with MarkLite' to the right-click menu for .md, .markdown and .txt files. / 添加到右键菜单"
+  ${NSD_CreateCheckbox} 0 42u 100% 18u "__MARKLITE_CONTEXT_MENU_LABEL__"
   Pop $RegisterContextMenuCheckbox
   ${NSD_SetState} $RegisterContextMenuCheckbox ${BST_CHECKED}
 
-  ${NSD_CreateCheckbox} 0 66u 100% 28u "Set MarkLite as the default app for Markdown files (.md, .markdown). Windows may still ask for confirmation in Default Apps. / 设为 Markdown 默认打开方式"
+  ${NSD_CreateCheckbox} 0 66u 100% 28u "__MARKLITE_DEFAULT_MARKDOWN_LABEL__"
   Pop $RegisterDefaultMarkdownCheckbox
   ${NSD_SetState} $RegisterDefaultMarkdownCheckbox ${BST_UNCHECKED}
 
@@ -139,6 +147,10 @@ Function un.UnregisterMarkLiteIntegrations
   System::Call 'Shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
 FunctionEnd
 '@
+
+$functionPatch = $functionPatch.Replace("__MARKLITE_INTEGRATION_LABEL__", $integrationLabel)
+$functionPatch = $functionPatch.Replace("__MARKLITE_CONTEXT_MENU_LABEL__", $contextMenuLabel)
+$functionPatch = $functionPatch.Replace("__MARKLITE_DEFAULT_MARKDOWN_LABEL__", $defaultMarkdownLabel)
 
 $installPatch = @'
   ${If} $RegisterContextMenuCheckboxState = ${BST_CHECKED}
