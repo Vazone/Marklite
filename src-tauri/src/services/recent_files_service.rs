@@ -126,3 +126,87 @@ fn path_identity(path: &str) -> String {
         path.to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::Arc,
+        thread,
+    };
+
+    use super::{add_recent_file_to, get_recent_files_from};
+
+    fn test_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "marklite-recent-{}-{}-{name}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    fn remove_backups(path: &Path) {
+        let prefix = path.file_stem().unwrap().to_string_lossy();
+        for entry in fs::read_dir(path.parent().unwrap()).unwrap().flatten() {
+            if entry.path() != path
+                && entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(prefix.as_ref())
+            {
+                fs::remove_file(entry.path()).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn applies_the_exact_limit_and_round_trips() {
+        let path = test_path("limit");
+
+        add_recent_file_to(&path, "C:\\docs\\a.md", 3).unwrap();
+        add_recent_file_to(&path, "C:\\docs\\b.md", 3).unwrap();
+        let files = add_recent_file_to(&path, "C:\\docs\\c.md", 2).unwrap();
+
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].title, "c.md");
+        assert_eq!(get_recent_files_from(&path).unwrap().len(), 2);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn backs_up_corrupt_json_and_reports_the_recovery() {
+        let path = test_path("corrupt");
+        fs::write(&path, "{not-json").unwrap();
+
+        let error = get_recent_files_from(&path).unwrap_err();
+
+        assert_eq!(error.code, "RECENT_FILES_READ_FAILED");
+        assert!(get_recent_files_from(&path).unwrap().is_empty());
+        remove_backups(&path);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn serializes_concurrent_read_modify_write_updates() {
+        let path = Arc::new(test_path("concurrent"));
+        let handles = (0..8)
+            .map(|index| {
+                let path = Arc::clone(&path);
+                thread::spawn(move || {
+                    add_recent_file_to(path.as_ref(), &format!("C:\\docs\\{index}.md"), 20)
+                        .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        assert_eq!(get_recent_files_from(path.as_ref()).unwrap().len(), 8);
+        fs::remove_file(path.as_ref()).unwrap();
+    }
+}

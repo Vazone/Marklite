@@ -210,3 +210,43 @@ fn markdown_arg_from_args(args: &[String], cwd: &str) -> Option<String> {
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::markdown_arg_from_args;
+
+    #[test]
+    fn single_instance_arguments_resolve_relative_markdown_to_canonical_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "marklite-single-instance-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let markdown = dir.join("note.md");
+        fs::write(&markdown, "note").unwrap();
+
+        let args = vec!["marklite.exe".to_string(), "note.md".to_string()];
+        assert_eq!(
+            markdown_arg_from_args(&args, &dir.to_string_lossy()),
+            Some(
+                crate::utils::path_utils::canonicalize_path(&markdown)
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            )
+        );
+
+        let rejected = vec!["marklite.exe".to_string(), "missing.md".to_string()];
+        assert_eq!(
+            markdown_arg_from_args(&rejected, &dir.to_string_lossy()),
+            None
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+}

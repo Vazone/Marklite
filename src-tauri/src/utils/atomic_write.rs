@@ -120,3 +120,69 @@ fn write_lock() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::PathBuf, sync::Arc, thread};
+
+    use super::{atomic_write, recover_atomic_write, sibling_path, BACKUP_SUFFIX};
+
+    fn test_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "marklite-atomic-{}-{}-{name}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn replaces_an_existing_file_without_partial_content() {
+        let path = test_path("replace");
+        fs::write(&path, "old").unwrap();
+
+        atomic_write(&path, b"new content").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new content");
+        assert!(!sibling_path(&path, BACKUP_SUFFIX).unwrap().exists());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn restores_an_interrupted_replacement_backup() {
+        let path = test_path("recover");
+        let backup = sibling_path(&path, BACKUP_SUFFIX).unwrap();
+        fs::write(&backup, "preserved").unwrap();
+
+        recover_atomic_write(&path).unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "preserved");
+        assert!(!backup.exists());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn serializes_concurrent_writers_without_mixing_content() {
+        let path = Arc::new(test_path("concurrent"));
+        let values = (0..8)
+            .map(|index| format!("writer-{index}"))
+            .collect::<Vec<_>>();
+        let handles = values
+            .iter()
+            .cloned()
+            .map(|value| {
+                let path = Arc::clone(&path);
+                thread::spawn(move || atomic_write(path.as_ref(), value.as_bytes()).unwrap())
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let content = fs::read_to_string(path.as_ref()).unwrap();
+        assert!(values.contains(&content));
+        fs::remove_file(path.as_ref()).unwrap();
+    }
+}

@@ -43,11 +43,36 @@ export function windowsPathIdentity(path: string | null | undefined): string | n
   return identity.toLowerCase();
 }
 
-export function isSameWindowsFilePath(
+export function posixPathIdentity(path: string | null | undefined): string | null {
+  if (!path || /[\u0000-\u001f]/.test(path)) return null;
+  const normalized = path.trim();
+  if (!normalized.startsWith('/') || normalized.startsWith('//')) return null;
+
+  const stack: string[] = [];
+  for (const segment of normalized.split('/')) {
+    if (!segment || segment === '.') continue;
+    if (segment === '..') {
+      if (!stack.length) return null;
+      stack.pop();
+      continue;
+    }
+    stack.push(segment);
+  }
+  return `/${stack.join('/')}`;
+}
+
+export function filePathIdentity(path: string | null | undefined): string | null {
+  const windowsIdentity = windowsPathIdentity(path);
+  if (windowsIdentity !== null) return `windows:${windowsIdentity}`;
+  const posixIdentity = posixPathIdentity(path);
+  return posixIdentity === null ? null : `posix:${posixIdentity}`;
+}
+
+export function isSameFilePath(
   left: string | null | undefined,
   right: string | null | undefined
 ): boolean {
-  const leftIdentity = windowsPathIdentity(left);
-  const rightIdentity = windowsPathIdentity(right);
+  const leftIdentity = filePathIdentity(left);
+  const rightIdentity = filePathIdentity(right);
   return leftIdentity !== null && rightIdentity !== null && leftIdentity === rightIdentity;
 }

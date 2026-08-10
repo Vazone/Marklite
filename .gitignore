@@ -10,19 +10,8 @@ src-tauri/gen/
 !.env.example
 coverage/
 .vite/
+tmp/
 *.tsbuildinfo
 Thumbs.db
 Desktop.ini
 .DS_Store
-
-# Source-only remote branch exclusions
-SECURITY.md
-vitest.config.ts
-**/*.test.ts
-**/*.test.js
-**/*.test.svelte
-**/*.spec.ts
-**/*.spec.js
-**/*.spec.svelte
-src/test/
-scripts/test-*.ps1

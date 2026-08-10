@@ -4,7 +4,7 @@
   import type { EditorTab } from '../../app/stores/documentStore';
   import type { RecentFileDto } from '../../lib/tauriApi';
   import type { SidebarTab } from '../../app/stores/uiStore';
-  import { isSameWindowsFilePath } from '../../lib/windowsPathIdentity';
+  import { isSameFilePath } from '../../lib/filePathIdentity';
 
   type RecentContextMenu = {
     x: number;
@@ -26,7 +26,7 @@
   $: currentLine = tab?.scrollPosition.line ?? tab?.cursorPosition.line ?? 1;
   $: currentOutline = tab?.outline.filter((item) => item.line <= currentLine).at(-1);
   $: currentRecentIndex = tab?.path
-    ? recentFiles.findIndex((file) => isSameWindowsFilePath(file.path, tab?.path))
+    ? recentFiles.findIndex((file) => isSameFilePath(file.path, tab?.path))
     : -1;
 
   onMount(() => {

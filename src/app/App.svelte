@@ -12,6 +12,7 @@
   import CommandPalette from '../components/layout/CommandPalette.svelte';
   import SettingsDialog from '../components/dialogs/SettingsDialog.svelte';
   import AboutDialog from '../components/dialogs/AboutDialog.svelte';
+  import ExitConfirmationDialog from '../components/dialogs/ExitConfirmationDialog.svelte';
   import {
     activeTab,
     documentStore,
@@ -40,6 +41,12 @@
   import type { CommandItem } from '../lib/commands';
   import { createAsyncSingleFlight } from '../lib/asyncSingleFlight';
   import { applyDocumentOperation } from '../lib/documentOperation';
+  import { isSameFilePath } from '../lib/filePathIdentity';
+  import {
+    createExitProtectionController,
+    type DirtyExitDocument,
+    type ExitPromptState
+  } from '../lib/exitProtection';
   import { startupElapsedMs, type FrontendStartupStage } from '../lib/startupLifecycle';
 
   let editorRef: any;
@@ -58,7 +65,22 @@
   const autosaveFailureKeys = new Map<string, string>();
   let unlistenDrop: (() => void) | undefined;
   let unlistenSingleInstance: (() => void) | undefined;
+  let unlistenCloseRequested: (() => void) | undefined;
+  let allowNativeClose = false;
+  let allowBrowserUnload = false;
+  let exitPrompt: ExitPromptState | null = null;
   const initializationStartedAt = performance.now();
+  const exitProtection = createExitProtectionController({
+    getDirtyDocuments: getDirtyExitDocuments,
+    onPromptChange: (state) => {
+      exitPrompt = state;
+    },
+    saveDocument: saveDirtyDocumentBeforeExit,
+    closeWindow: closeApplicationWindow,
+    onCloseError: (error) => {
+      uiActions.toast(`无法退出：${toAppError(error).message}`, 'error');
+    }
+  });
 
   $: currentTitle = $activeTab?.title ?? 'Untitled.md';
   $: effectiveSidebarVisible = $uiStore.sidebarVisible && $settingsStore.showSidebar;
@@ -107,12 +129,15 @@
     void initialize().catch((error) => {
       uiActions.toast(`启动初始化未完全完成：${toAppError(error).message}`, 'error');
     });
+    if (isTauriRuntime()) {
+      void setupCloseProtection();
+    }
 
     const keyHandler = (event: KeyboardEvent) => {
       handleGlobalShortcut(event);
     };
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (get(documentStore).tabs.some((tab) => tab.isDirty)) {
+      if (!allowBrowserUnload && get(documentStore).tabs.some((tab) => tab.isDirty)) {
         event.preventDefault();
         event.returnValue = '';
       }
@@ -126,6 +151,7 @@
       window.removeEventListener('beforeunload', beforeUnload);
       unlistenDrop?.();
       unlistenSingleInstance?.();
+      unlistenCloseRequested?.();
     };
   });
 
@@ -270,6 +296,21 @@
       });
     } catch (error) {
       console.warn('Failed to register external open listener', error);
+    }
+  }
+
+  async function setupCloseProtection() {
+    try {
+      unlistenCloseRequested = await getCurrentWindow().onCloseRequested((event) => {
+        if (allowNativeClose) {
+          allowNativeClose = false;
+          return;
+        }
+        exitProtection.handleCloseRequest(() => event.preventDefault());
+      });
+    } catch (error) {
+      console.warn('Failed to register close protection', error);
+      uiActions.toast('未能启用原生退出确认，仍保留系统卸载提示。', 'error');
     }
   }
 
@@ -442,7 +483,7 @@
     }
   }
 
-  async function saveTab(tabId: string, path: string, showToast: boolean): Promise<void> {
+  async function saveTab(tabId: string, path: string, showToast: boolean): Promise<boolean> {
     const request = saveSingleFlight.run(tabId, async () => {
       const tab = documentStore.getTab(tabId);
       if (!tab || tab.loadState !== 'loaded') return null;
@@ -458,13 +499,12 @@
 
     try {
       const result = await request.promise;
-      if (!result) return;
+      if (!result) return false;
       const saved = result.document;
 
       const current = documentStore.getTab(tabId);
-      if (!request.started && showToast && current && (current.isDirty || current.path !== path)) {
-        await saveTab(tabId, path, true);
-        return;
+      if (!request.started && showToast && current && (current.isDirty || !isSameFilePath(current.path, path))) {
+        return saveTab(tabId, path, true);
       }
 
       const savedMessage = current?.isDirty
@@ -482,6 +522,7 @@
           uiActions.toast(savedMessage, current?.isDirty ? 'info' : 'success');
         }
       }
+      return Boolean(current && !current.isDirty && isSameFilePath(current.path, path));
     } catch (error) {
       const appError = toAppError(error);
       const failureKey = `${appError.code}:${appError.message}`;
@@ -489,7 +530,71 @@
         uiActions.toast(appError.message, 'error');
       }
       autosaveFailureKeys.set(tabId, failureKey);
+      return false;
     }
+  }
+
+  function getDirtyExitDocuments(): DirtyExitDocument[] {
+    return get(documentStore)
+      .tabs.filter((tab) => tab.isDirty)
+      .map((tab) => ({
+        id: tab.id,
+        title: tab.title,
+        path: tab.path,
+        contentRevision: tab.contentRevision
+      }));
+  }
+
+  async function saveDirtyDocumentBeforeExit(document: DirtyExitDocument): Promise<boolean> {
+    const tab = documentStore.getTab(document.id);
+    if (!tab || !tab.isDirty) return true;
+    if (tab.loadState !== 'loaded') {
+      uiActions.toast(`“${tab.title}” 尚未加载，无法安全保存，已取消退出。`, 'error');
+      return false;
+    }
+
+    try {
+      const path = tab.path ?? (await pickMarkdownSavePath(tab.title));
+      if (!path) {
+        uiActions.toast(`已取消保存“${tab.title}”，软件保持打开。`, 'info');
+        return false;
+      }
+
+      const saved = await saveTab(tab.id, path, true);
+      if (!saved) {
+        const current = documentStore.getTab(tab.id);
+        if (current?.isDirty) {
+          uiActions.toast(`“${current.title}”仍有未保存更改，软件保持打开。`, 'info');
+        }
+      }
+      return saved;
+    } catch (error) {
+      uiActions.toast(`无法保存“${tab.title}”：${toAppError(error).message}`, 'error');
+      return false;
+    }
+  }
+
+  async function closeApplicationWindow(): Promise<void> {
+    if (sessionTimer) {
+      window.clearTimeout(sessionTimer);
+      sessionTimer = undefined;
+    }
+    await persistSession(get(settingsStore).restoreLastSession, currentSessionSnapshot(get(documentStore)));
+
+    allowNativeClose = true;
+    allowBrowserUnload = true;
+    try {
+      await getCurrentWindow().close();
+    } catch (error) {
+      allowNativeClose = false;
+      allowBrowserUnload = false;
+      throw error;
+    }
+
+    window.setTimeout(() => {
+      allowNativeClose = false;
+      allowBrowserUnload = false;
+    }, 500);
   }
 
   async function exportHtml() {
@@ -850,6 +955,16 @@
   onClose={uiActions.closeAbout}
   onExportDiagnostics={() => void exportStartupDiagnostics()}
   onClearDiagnostics={() => void clearStartupDiagnostics()}
+/>
+
+<ExitConfirmationDialog
+  open={exitPrompt !== null}
+  documents={exitPrompt?.documents ?? []}
+  busy={exitPrompt?.busy ?? false}
+  busyLabel={exitPrompt?.busyLabel ?? ''}
+  onSave={() => void exitProtection.saveAndExit()}
+  onDiscard={() => void exitProtection.discardAndExit()}
+  onCancel={() => exitProtection.cancel()}
 />
 
 <div class="toast-stack">

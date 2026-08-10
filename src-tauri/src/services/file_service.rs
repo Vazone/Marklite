@@ -125,3 +125,58 @@ fn system_time_to_rfc3339(time: SystemTime) -> String {
     let datetime: DateTime<Utc> = time.into();
     datetime.to_rfc3339()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ensure_allowed_file, read_markdown_file, save_markdown_file, MAX_FILE_SIZE};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
+
+    fn test_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "marklite-file-{}-{}-{name}.md",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn allows_markdown_and_text_files() {
+        assert!(ensure_allowed_file(Path::new("note.md")).is_ok());
+        assert!(ensure_allowed_file(Path::new("note.markdown")).is_ok());
+        assert!(ensure_allowed_file(Path::new("note.txt")).is_ok());
+    }
+
+    #[test]
+    fn rejects_other_extensions() {
+        assert!(ensure_allowed_file(Path::new("note.exe")).is_err());
+    }
+
+    #[test]
+    fn saved_documents_can_be_reopened() {
+        let path = test_path("round-trip");
+        let path_string = path.to_string_lossy();
+
+        save_markdown_file(&path_string, "# Atomic").unwrap();
+        let loaded = read_markdown_file(&path_string).unwrap();
+
+        assert_eq!(loaded.content, "# Atomic");
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn rejects_oversized_content_before_creating_a_file() {
+        let path = test_path("too-large");
+        let content = "x".repeat(MAX_FILE_SIZE as usize + 1);
+
+        let error = save_markdown_file(&path.to_string_lossy(), &content).unwrap_err();
+
+        assert_eq!(error.code, "FILE_TOO_LARGE");
+        assert!(!path.exists());
+    }
+}

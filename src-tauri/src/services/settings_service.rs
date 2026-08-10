@@ -144,3 +144,124 @@ fn settings_lock() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::PathBuf};
+
+    use serde_json::{json, Value};
+
+    use super::{load_settings_from, save_settings_to};
+    use crate::models::settings::{AppSettings, SETTINGS_SCHEMA_VERSION};
+
+    fn test_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "marklite-settings-{}-{}-{name}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    fn remove_backups(path: &PathBuf) {
+        let prefix = path.file_stem().unwrap().to_string_lossy();
+        for entry in fs::read_dir(path.parent().unwrap()).unwrap().flatten() {
+            if entry.path() != *path
+                && entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(prefix.as_ref())
+            {
+                fs::remove_file(entry.path()).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn migrates_legacy_objects_and_fills_missing_fields() {
+        let path = test_path("legacy");
+        let mut legacy = serde_json::to_value(AppSettings::default()).unwrap();
+        let object = legacy.as_object_mut().unwrap();
+        object.remove("showStatusBar");
+        object.insert("allowLocalImages".to_string(), Value::Bool(true));
+        fs::write(&path, serde_json::to_string_pretty(&legacy).unwrap()).unwrap();
+
+        let loaded = load_settings_from(&path).unwrap();
+        let migrated: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+
+        assert!(loaded.show_status_bar);
+        assert_eq!(migrated["version"], SETTINGS_SCHEMA_VERSION);
+        assert_eq!(migrated["settings"]["allowLocalImages"], true);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn round_trips_the_versioned_document() {
+        let path = test_path("round-trip");
+        let settings = AppSettings {
+            theme: crate::models::settings::ThemeMode::Dark,
+            ..AppSettings::default()
+        };
+
+        save_settings_to(&path, &settings).unwrap();
+
+        assert_eq!(load_settings_from(&path).unwrap(), settings);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_updates_without_writing() {
+        let path = test_path("invalid-update");
+        let settings = AppSettings {
+            recent_files_limit: 0,
+            ..AppSettings::default()
+        };
+
+        let error = save_settings_to(&path, &settings).unwrap_err();
+
+        assert_eq!(error.code, "INVALID_SETTINGS");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn backs_up_invalid_known_values_and_restores_defaults() {
+        let path = test_path("invalid-file");
+        let mut settings = serde_json::to_value(AppSettings::default())
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .clone();
+        settings.insert("recentFilesLimit".to_string(), Value::from(0));
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&json!({
+                "version": SETTINGS_SCHEMA_VERSION,
+                "settings": settings
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let error = load_settings_from(&path).unwrap_err();
+
+        assert_eq!(error.code, "SETTINGS_READ_FAILED");
+        assert_eq!(load_settings_from(&path).unwrap(), AppSettings::default());
+        remove_backups(&path);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn preserves_future_version_files() {
+        let path = test_path("future-version");
+        let raw = r#"{"version":999,"settings":{}}"#;
+        fs::write(&path, raw).unwrap();
+
+        let error = load_settings_from(&path).unwrap_err();
+
+        assert_eq!(error.code, "SETTINGS_VERSION_UNSUPPORTED");
+        assert_eq!(fs::read_to_string(&path).unwrap(), raw);
+        fs::remove_file(path).unwrap();
+    }
+}
