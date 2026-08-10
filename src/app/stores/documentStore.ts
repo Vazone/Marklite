@@ -1,7 +1,7 @@
 import { derived, get, writable } from 'svelte/store';
 import type { DocumentDto, DocumentStats, OutlineItem, RenderedMarkdownDto } from '../../lib/tauriApi';
 import type { SerializedEditorState } from '../../lib/editorSession';
-import { isSameWindowsFilePath } from '../../lib/windowsPathIdentity';
+import { isSameFilePath } from '../../lib/filePathIdentity';
 
 export type CursorPosition = {
   line: number;
@@ -233,7 +233,7 @@ export function createDocumentStore() {
     openDocument(document: DocumentDto) {
       store.update((state) => {
         const existing = state.tabs.find((tab) =>
-          isSameWindowsFilePath(tab.path, document.path)
+          isSameFilePath(tab.path, document.path)
         );
         if (existing) {
           return {
@@ -263,14 +263,14 @@ export function createDocumentStore() {
       store.update((state) => {
         const restoredTabs: EditorTab[] = [];
         for (const path of paths) {
-          if (!path.trim() || restoredTabs.some((tab) => isSameWindowsFilePath(tab.path, path))) continue;
+          if (!path.trim() || restoredTabs.some((tab) => isSameFilePath(tab.path, path))) continue;
           restoredTabs.push(createDeferredTab(path));
         }
         if (!restoredTabs.length) return state;
 
         if (state.tabs.length === 1 && canReplacePlaceholder(state.tabs[0])) {
           const restoredActive = activePath
-            ? restoredTabs.find((tab) => isSameWindowsFilePath(tab.path, activePath))
+            ? restoredTabs.find((tab) => isSameFilePath(tab.path, activePath))
             : undefined;
           return {
             tabs: restoredTabs,
@@ -279,7 +279,7 @@ export function createDocumentStore() {
         }
 
         const additions = restoredTabs.filter(
-          (restored) => !state.tabs.some((tab) => isSameWindowsFilePath(tab.path, restored.path))
+          (restored) => !state.tabs.some((tab) => isSameFilePath(tab.path, restored.path))
         );
         return additions.length ? { ...state, tabs: [...state.tabs, ...additions] } : state;
       });
@@ -321,8 +321,8 @@ export function createDocumentStore() {
           if (
             tab.id !== tabId ||
             tab.loadState === 'loaded' ||
-            !isSameWindowsFilePath(tab.path, requestedPath) ||
-            !isSameWindowsFilePath(document.path, requestedPath)
+            !isSameFilePath(tab.path, requestedPath) ||
+            !isSameFilePath(document.path, requestedPath)
           ) {
             return tab;
           }

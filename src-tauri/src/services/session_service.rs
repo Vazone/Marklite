@@ -107,3 +107,98 @@ fn session_lock() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::PathBuf};
+
+    use super::{clear_session_at, load_session_from, normalize_session, save_session_to};
+    use crate::models::session::{SessionState, MAX_SESSION_PATHS, SESSION_VERSION};
+
+    fn test_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "marklite-session-{}-{}-{name}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn normalizes_duplicates_limit_and_active_path() {
+        let mut paths = vec!["C:\\a.md".to_string(), "C:\\a.md".to_string()];
+        paths.extend((0..MAX_SESSION_PATHS + 5).map(|index| format!("C:\\{index}.md")));
+
+        let normalized = normalize_session(SessionState {
+            version: SESSION_VERSION,
+            paths,
+            active_path: Some("C:\\missing.md".to_string()),
+        });
+
+        assert_eq!(normalized.paths.len(), MAX_SESSION_PATHS);
+        assert_eq!(normalized.paths[0], "C:\\a.md");
+        assert_eq!(normalized.active_path, None);
+    }
+
+    #[test]
+    fn round_trips_a_valid_session() {
+        let path = test_path("round-trip");
+        let session = SessionState {
+            version: SESSION_VERSION,
+            paths: vec!["C:\\docs\\a.md".to_string()],
+            active_path: Some("C:\\docs\\a.md".to_string()),
+        };
+
+        let saved = save_session_to(&path, session.clone()).unwrap();
+        let loaded = load_session_from(&path).unwrap();
+
+        assert_eq!(saved, session);
+        assert_eq!(loaded, session);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn corrupt_session_is_backed_up_and_rejected() {
+        let path = test_path("corrupt");
+        fs::write(&path, "{not-json").unwrap();
+
+        let error = load_session_from(&path).unwrap_err();
+
+        assert_eq!(error.code, "SESSION_READ_FAILED");
+        assert!(!path.exists());
+        let prefix = path.file_stem().unwrap().to_string_lossy();
+        let backups = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(prefix.as_ref())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(backups.len(), 1);
+        fs::remove_file(backups[0].path()).unwrap();
+    }
+
+    #[test]
+    fn clear_removes_session_and_load_falls_back_to_default() {
+        let path = test_path("clear");
+        save_session_to(
+            &path,
+            SessionState {
+                version: SESSION_VERSION,
+                paths: vec!["C:\\docs\\a.md".to_string()],
+                active_path: Some("C:\\docs\\a.md".to_string()),
+            },
+        )
+        .unwrap();
+
+        clear_session_at(&path).unwrap();
+
+        assert!(!path.exists());
+        assert_eq!(load_session_from(&path).unwrap(), SessionState::default());
+    }
+}

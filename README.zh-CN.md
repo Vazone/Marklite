@@ -1,23 +1,23 @@
 # MarkLite
 
-MarkLite 是由 **Vazone** 发起的轻量级 Windows Markdown 编辑器，面向日常写作、笔记整理、文档预览和本地 Markdown 文件管理。项目基于 Rust、Tauri 2、Svelte、TypeScript、CodeMirror 6 和 pulldown-cmark 构建，目标是在 Windows 上提供比 Electron 更轻、更快、更安静的 Markdown 编辑体验。
+MarkLite 是由 **Vazone** 发起的轻量级跨平台 Markdown 编辑器，面向日常写作、笔记整理、文档预览和本地 Markdown 文件管理。项目基于 Rust、Tauri 2、Svelte、TypeScript、CodeMirror 6 和 pulldown-cmark 构建，面向 Windows、macOS 和 Linux 提供轻量桌面编辑体验。
 
 ![MarkLite 界面截图](assets/marklite-screenshot.png)
 
 ## 下载
 
-从 [MarkLite Releases](https://github.com/Vazone/Marklite/releases) 页面下载 Windows 安装程序。
+从 [MarkLite Releases](https://github.com/Vazone/Marklite/releases) 页面下载 Windows x64、macOS Intel/Apple Silicon 或 Linux x64 安装包。安装前请阅读该版本的签名说明并核对 `SHA256SUMS.txt`。
 
 > 本项目是 vibe coding / AI assisted coding 方式完成的开源项目。如果项目中无意包含任何可能侵权的内容，请在 GitHub 仓库联系作者 Vazone，我会尽快核实并删除或替换相关内容。
 
 ## 关键词
 
-Markdown editor, Windows Markdown editor, Rust Markdown editor, Tauri Markdown editor, CodeMirror editor, lightweight notes app, Markdown preview, Windows desktop Markdown, MarkLite, Windows 笔记软件, Markdown 编辑器, Tauri 桌面应用。
+Markdown editor, cross-platform Markdown editor, Windows Markdown editor, macOS Markdown editor, Linux Markdown editor, Rust Markdown editor, Tauri Markdown editor, CodeMirror editor, lightweight notes app, Markdown preview, MarkLite, Markdown 编辑器, Tauri 桌面应用。
 
 ## 功能
 
 - 新建、打开、保存、另存为 `.md`、`.markdown`、`.txt` 文件
-- 多标签编辑，未保存状态提示，关闭未保存文件确认
+- 多标签编辑和未保存状态提示；退出软件前可选择保存、不保存或取消
 - CodeMirror 6 编辑器，支持 Markdown 高亮、行号、自动换行、当前行高亮、查找
 - Markdown 工具栏：加粗、斜体、删除线、标题、引用、代码块、行内代码、列表、任务列表、链接、图片、表格、分割线
 - Rust 后端使用 pulldown-cmark 渲染 Markdown
@@ -27,6 +27,7 @@ Markdown editor, Windows Markdown editor, Rust Markdown editor, Tauri Markdown e
 - 设置窗口：主题、强调色、字体、字号、行高、行号、自动换行、自动保存、预览延迟、状态栏、侧边栏
 - 导出 HTML
 - 拖拽文件打开
+- GitHub Actions 构建 Windows x64、Linux x64、macOS Intel 和 macOS Apple Silicon 安装包
 - Windows 安装器支持可选注册右键菜单和 Markdown 默认打开方式
 
 ## 技术栈
@@ -46,9 +47,10 @@ Markdown editor, Windows Markdown editor, Rust Markdown editor, Tauri Markdown e
 
 - Node.js 24+
 - npm 11+
-- Rust stable
-- Microsoft Visual Studio Build Tools
-- Microsoft Edge WebView2 Runtime
+- Rust 1.88（仓库通过 `rust-toolchain.toml` 固定工具链）
+- [Tauri 前置要求](https://v2.tauri.app/zh-cn/start/prerequisites/)中对应平台的系统依赖
+
+Windows 开发还需要 Microsoft Visual Studio Build Tools 和 Microsoft Edge WebView2 Runtime；Linux 需要 WebKitGTK 4.1 开发库；macOS 需要 Xcode Command Line Tools。
 
 检查 Tauri 环境：
 
@@ -59,7 +61,7 @@ npm run tauri -- info
 ## 安装依赖
 
 ```bash
-npm install
+npm ci
 ```
 
 ## 开发运行
@@ -74,7 +76,7 @@ npm run tauri dev
 npm run dev
 ```
 
-## 构建安装程序
+## 构建与发布安装包
 
 推荐使用项目封装的 Windows 打包命令：
 
@@ -91,8 +93,10 @@ npm run package:windows
 输出路径：
 
 ```text
-src-tauri/target/release/bundle/nsis/MarkLite_0.1.2_x64-setup.exe
+src-tauri/target/release/bundle/nsis/MarkLite_<version>_x64-setup.exe
 ```
+
+Linux 和 macOS 包由版本 tag 触发的 GitHub Actions 在原生 runner 上构建。只有所有平台任务都成功才会发布 Release，详见 [GitHub Actions 发布流程](.github/workflows/release.yml)。
 
 ## 许可证
 

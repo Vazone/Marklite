@@ -1,0 +1,257 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Verify version and tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: npm run version:check
+
+      - name: Require versioned release notes
+        run: test -f ".github/release-notes/${GITHUB_REF_NAME}.md"
+
+      - name: Audit high-severity npm advisories
+        run: npm audit --registry=https://registry.npmjs.org --audit-level=high
+
+      - name: Type and Svelte checks
+        run: npm run check
+
+  windows:
+    name: Windows x64 NSIS
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Setup Rust 1.88
+        uses: dtolnay/rust-toolchain@2eae45db285e407f22119950686d47e1101e071b
+        with:
+          toolchain: 1.88.0
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build verified Windows installer
+        run: npm run package:windows
+
+      - name: Upload Windows release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: marklite-windows-x64
+          path: |
+            src-tauri/target/release/bundle/nsis/MarkLite_*_x64-setup.exe
+            src-tauri/target/release/bundle/nsis/MarkLite_*_x64-setup.exe.sha256
+            src-tauri/target/release/bundle/nsis/MarkLite_*_x64-setup.exe.release.json
+          if-no-files-found: error
+          retention-days: 7
+
+  linux:
+    name: Linux x64 AppImage and DEB
+    needs: validate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Setup Rust 1.88
+        uses: dtolnay/rust-toolchain@2eae45db285e407f22119950686d47e1101e071b
+        with:
+          toolchain: 1.88.0
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Linux bundles
+        run: npm run tauri -- build --bundles appimage,deb
+
+      - name: Normalize Linux asset names
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          appimage="$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+          deb="$(find src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          test -n "$appimage"
+          test -n "$deb"
+          mkdir -p release-assets
+          cp "$appimage" "release-assets/MarkLite_${version}_linux_x86_64.AppImage"
+          cp "$deb" "release-assets/MarkLite_${version}_linux_amd64.deb"
+
+      - name: Upload Linux release candidates
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: marklite-linux-x64
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    name: macOS ${{ matrix.label }} DMG
+    needs: validate
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            label: Apple-Silicon
+            suffix: aarch64
+          - target: x86_64-apple-darwin
+            label: Intel
+            suffix: x86_64
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Setup Rust 1.88 and macOS targets
+        uses: dtolnay/rust-toolchain@2eae45db285e407f22119950686d47e1101e071b
+        with:
+          toolchain: 1.88.0
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build macOS DMG
+        run: npm run tauri -- build --target ${{ matrix.target }} --bundles dmg
+
+      - name: Normalize macOS asset name
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          dmg="$(find "src-tauri/target/${{ matrix.target }}/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          test -n "$dmg"
+          mkdir -p release-assets
+          cp "$dmg" "release-assets/MarkLite_${version}_macos_${{ matrix.suffix }}.dmg"
+
+      - name: Upload macOS release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: marklite-macos-${{ matrix.suffix }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Pre-release
+    needs: [windows, linux, macos]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Download all release candidates
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify release set and generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find release-assets -maxdepth 1 -type f -name '*.exe' | wc -l)" -eq 1
+          test "$(find release-assets -maxdepth 1 -type f -name '*.AppImage' | wc -l)" -eq 1
+          test "$(find release-assets -maxdepth 1 -type f -name '*.deb' | wc -l)" -eq 1
+          test "$(find release-assets -maxdepth 1 -type f -name '*.dmg' | wc -l)" -eq 2
+          test "$(find release-assets -maxdepth 1 -type f -name '*.release.json' | wc -l)" -eq 1
+          test "$(find release-assets -maxdepth 1 -type f -name '*.sha256' | wc -l)" -eq 1
+          find release-assets -maxdepth 1 -type f \( -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.dmg' \) -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            | sed 's#release-assets/##' > release-assets/SHA256SUMS.txt
+          test "$(wc -l < release-assets/SHA256SUMS.txt)" -eq 5
+          cat release-assets/SHA256SUMS.txt
+
+      - name: Create or update draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes_file=".github/release-notes/${GITHUB_REF_NAME}.md"
+          if release_json="$(gh release view "$GITHUB_REF_NAME" --json isDraft 2>/dev/null)"; then
+            is_draft="$(printf '%s' "$release_json" | jq -r '.isDraft')"
+            if [ "$is_draft" != "true" ]; then
+              echo "Refusing to overwrite an already-published release: $GITHUB_REF_NAME" >&2
+              exit 1
+            fi
+            gh release edit "$GITHUB_REF_NAME" --draft --prerelease \
+              --title "MarkLite ${GITHUB_REF_NAME}" --notes-file "$notes_file"
+            gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release-assets/* --verify-tag --draft --prerelease \
+              --latest=false --title "MarkLite ${GITHUB_REF_NAME}" --notes-file "$notes_file"
+          fi
+
+      - name: Verify assets and publish Pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset_count="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')"
+          test "$asset_count" -eq 8
+          gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease

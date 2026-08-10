@@ -4,7 +4,7 @@ use crate::models::app_error::AppError;
 
 pub fn app_data_dir() -> Result<PathBuf, AppError> {
     let base = dirs::data_dir()
-        .ok_or_else(|| AppError::new("APP_DATA_UNAVAILABLE", "无法找到 Windows 应用数据目录"))?;
+        .ok_or_else(|| AppError::new("APP_DATA_UNAVAILABLE", "无法找到应用数据目录"))?;
     let dir = base.join("MarkLite");
     fs::create_dir_all(&dir).map_err(AppError::settings_write_failed)?;
     Ok(dir)

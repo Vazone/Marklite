@@ -53,6 +53,16 @@ impl StartupState {
         Self::build(app_version, webview_version, log_dir)
     }
 
+    #[cfg(test)]
+    fn new_in(
+        app_version: &str,
+        webview_version: Option<String>,
+        log_dir: PathBuf,
+    ) -> io::Result<Self> {
+        fs::create_dir_all(&log_dir)?;
+        Ok(Self::build(app_version, webview_version, Some(log_dir)))
+    }
+
     fn build(app_version: &str, webview_version: Option<String>, log_dir: Option<PathBuf>) -> Self {
         let launch_id = format!(
             "{}-{}",
@@ -336,4 +346,113 @@ fn validate_export_target(target: &Path) -> Result<PathBuf, AppError> {
         .file_name()
         .ok_or_else(AppError::invalid_startup_diagnostics_target)?;
     Ok(canonical_parent.join(file_name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::startup::{
+        FrontendStartupCode, FrontendStartupStage, FrontendStartupStatus,
+    };
+
+    fn test_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "marklite-startup-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn records_only_typed_privacy_safe_startup_fields() {
+        let dir = test_dir("privacy");
+        let state = StartupState::new_in("0.1.2", Some("151.0.0".into()), dir.clone()).unwrap();
+        state
+            .record_native("nativeProcess", "started", None)
+            .unwrap();
+        state
+            .record_frontend(FrontendStartupEventDto {
+                stage: FrontendStartupStage::FrontendEntry,
+                status: FrontendStartupStatus::Failed,
+                code: Some(FrontendStartupCode::UnhandledError),
+                elapsed_ms: 12,
+            })
+            .unwrap();
+
+        let content = fs::read_to_string(diagnostic_files(&dir).unwrap().pop().unwrap()).unwrap();
+        assert!(content.contains("frontendEntry"));
+        assert!(content.contains("unhandledError"));
+        assert!(!content.contains("Users"));
+        assert!(!content.contains("note.md"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ready_and_retry_are_idempotent_and_bounded() {
+        let dir = test_dir("state");
+        let state = StartupState::new_in("0.1.2", None, dir.clone()).unwrap();
+        assert!(!state.is_ready());
+        assert!(state.claim_retry());
+        assert!(!state.claim_retry());
+        state.mark_ready(25).unwrap();
+        state.mark_ready(30).unwrap();
+        assert!(state.is_ready());
+        let content = fs::read_to_string(diagnostic_files(&dir).unwrap().pop().unwrap()).unwrap();
+        assert_eq!(content.matches("frontendReady").count(), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rejects_inconsistent_frontend_status_code_pairs() {
+        let dir = test_dir("invalid-event");
+        let state = StartupState::new_in("0.1.2", None, dir.clone()).unwrap();
+        let error = state
+            .record_frontend(FrontendStartupEventDto {
+                stage: FrontendStartupStage::DomReady,
+                status: FrontendStartupStatus::Succeeded,
+                code: Some(FrontendStartupCode::UnhandledError),
+                elapsed_ms: 1,
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "INVALID_STARTUP_DIAGNOSTIC_EVENT");
+        assert!(diagnostic_files(&dir).unwrap().is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn exports_valid_records_and_clear_removes_only_diagnostic_files() {
+        let dir = test_dir("export");
+        let state = StartupState::new_in("0.1.2", None, dir.clone()).unwrap();
+        state
+            .record_native("nativeProcess", "started", None)
+            .unwrap();
+        fs::write(dir.join("keep.txt"), "keep").unwrap();
+        let export_path = dir.join("export.json");
+        let result = state.export(&export_path).unwrap();
+        assert_eq!(result.record_count, 1);
+        let export: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(export_path).unwrap()).unwrap();
+        assert_eq!(export["schemaVersion"], 1);
+        assert_eq!(export["records"].as_array().unwrap().len(), 1);
+
+        state.clear().unwrap();
+        assert!(dir.join("keep.txt").exists());
+        assert!(diagnostic_files(&dir).unwrap().is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn pruning_keeps_a_bounded_number_of_launch_files() {
+        let dir = test_dir("retention");
+        fs::create_dir_all(&dir).unwrap();
+        for index in 0..(MAX_RETAINED_FILES + 5) {
+            fs::write(dir.join(format!("startup-old-{index:02}.jsonl")), "{}\n").unwrap();
+        }
+        let _state = StartupState::new_in("0.1.2", None, dir.clone()).unwrap();
+        assert!(diagnostic_files(&dir).unwrap().len() < MAX_RETAINED_FILES);
+        fs::remove_dir_all(dir).unwrap();
+    }
 }

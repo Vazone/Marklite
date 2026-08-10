@@ -2,34 +2,34 @@
 
 [中文说明](README.zh-CN.md) | [English README](README.en.md)
 
-MarkLite is a lightweight Windows Markdown editor by **Vazone**, built with Rust, Tauri 2, Svelte, TypeScript, CodeMirror 6, and pulldown-cmark.
+MarkLite is a lightweight cross-platform Markdown editor by **Vazone**, built with Rust, Tauri 2, Svelte, TypeScript, CodeMirror 6, and pulldown-cmark.
 
-MarkLite 是由 **Vazone** 发起的轻量级 Windows Markdown 编辑器，适合本地 Markdown 写作、预览、笔记整理和文档管理。
+MarkLite 是由 **Vazone** 发起的轻量级跨平台 Markdown 编辑器，适合在 Windows、macOS 和 Linux 上进行本地写作、预览、笔记整理和文档管理。
 
 ![MarkLite interface screenshot](assets/marklite-screenshot.png)
 
 ## Download
 
-Download the Windows installer from the [MarkLite Releases](https://github.com/Vazone/Marklite/releases) page.
+Download Windows x64, macOS Intel/Apple Silicon, or Linux x64 packages from [MarkLite Releases](https://github.com/Vazone/Marklite/releases). Check each release's signing notice and `SHA256SUMS.txt` before installation.
 
 ## Highlights
 
-- Windows Markdown editor with a small Tauri/Rust desktop footprint
+- Cross-platform Markdown editor with a small Tauri/Rust desktop footprint
 - Live Markdown preview, split view, edit-only mode, and preview-only mode
 - CodeMirror 6 editing experience with toolbar, search, line numbers, word wrap, and multi-tab editing
+- Save, discard, or cancel before app exit when documents still contain unsaved changes
 - Recent files, outline, document stats, settings, theme options, and HTML export
-- NSIS installer with optional right-click “Open with MarkLite” registration
-- Optional installer checkbox to register MarkLite as the default Markdown opener
-- Release builds use the Windows GUI subsystem, so launching MarkLite does not open a terminal window
+- GitHub Actions packages Windows x64, Linux x64, macOS Intel, and macOS Apple Silicon releases
+- Windows NSIS installer includes optional “Open with MarkLite” and default Markdown opener integration
 
 ## Quick Start
 
 ```bash
-npm install
+npm ci
 npm run tauri dev
 ```
 
-Build the Windows installer:
+Build the verified Windows installer locally:
 
 ```bash
 npm run package:windows
@@ -38,8 +38,10 @@ npm run package:windows
 Output:
 
 ```text
-src-tauri/target/release/bundle/nsis/MarkLite_0.1.2_x64-setup.exe
+src-tauri/target/release/bundle/nsis/MarkLite_<version>_x64-setup.exe
 ```
+
+Linux and macOS packages are built natively by the tag-driven [GitHub Actions release workflow](.github/workflows/release.yml).
 
 ## License
 

@@ -647,6 +647,7 @@ button {
 
 .settings-dialog,
 .about-dialog,
+.exit-confirmation-dialog,
 .command-palette {
   width: min(900px, calc(100vw - 36px));
   max-height: calc(100vh - 50px);
@@ -655,6 +656,74 @@ button {
   border-radius: var(--radius-lg);
   background: var(--panel-bg);
   box-shadow: var(--shadow-soft);
+}
+
+.exit-confirmation-dialog {
+  width: min(560px, calc(100vw - 36px));
+}
+
+.exit-confirmation-body {
+  display: grid;
+  gap: 12px;
+  padding: 18px 22px;
+}
+
+.exit-confirmation-body > p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.exit-confirmation-body ul {
+  display: grid;
+  gap: 6px;
+  max-height: min(260px, 36vh);
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.exit-confirmation-body li {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.exit-confirmation-body li strong,
+.exit-confirmation-body li small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exit-confirmation-body li small,
+.exit-confirmation-more {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.exit-confirmation-warning {
+  color: var(--danger-color) !important;
+}
+
+.exit-confirmation-progress {
+  color: var(--accent-color) !important;
+}
+
+.exit-confirmation-actions {
+  justify-content: space-between;
+}
+
+.exit-confirmation-actions > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .about-dialog {
@@ -884,14 +953,35 @@ kbd {
 }
 
 .ghost-button,
-.primary-button {
+.primary-button,
+.danger-button {
   min-height: 34px;
   padding: 0 13px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
 }
 
 .primary-button {
   background: var(--accent-color);
   color: var(--accent-contrast);
+}
+
+.danger-button {
+  border-color: color-mix(in srgb, var(--danger-color) 48%, var(--border-color));
+  background: transparent;
+  color: var(--danger-color);
+}
+
+.danger-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger-color) 12%, transparent);
+}
+
+.ghost-button:disabled,
+.primary-button:disabled,
+.danger-button:disabled {
+  cursor: wait;
+  opacity: 0.58;
 }
 
 .palette-backdrop {

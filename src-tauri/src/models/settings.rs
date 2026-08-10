@@ -104,3 +104,46 @@ where
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::AppSettings;
+
+    #[test]
+    fn shared_defaults_are_valid() {
+        AppSettings::default().validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_color_font_and_numeric_boundaries() {
+        let settings = AppSettings {
+            accent_color: "red".to_string(),
+            ..AppSettings::default()
+        };
+        assert!(settings.validate().unwrap_err().contains("accentColor"));
+
+        let settings = AppSettings {
+            editor_font_family: "\n".to_string(),
+            ..AppSettings::default()
+        };
+        assert!(settings
+            .validate()
+            .unwrap_err()
+            .contains("editorFontFamily"));
+
+        let settings = AppSettings {
+            recent_files_limit: 0,
+            ..AppSettings::default()
+        };
+        assert!(settings
+            .validate()
+            .unwrap_err()
+            .contains("recentFilesLimit"));
+
+        let settings = AppSettings {
+            interface_scale: f32::NAN,
+            ..AppSettings::default()
+        };
+        assert!(settings.validate().unwrap_err().contains("interfaceScale"));
+    }
+}

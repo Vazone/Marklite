@@ -28,7 +28,7 @@
         <button type="button" class="ghost-button" on:click={onClose}>关闭</button>
       </header>
       <p>
-        MarkLite 是一个面向 Windows 的轻量 Markdown 编辑器，支持文件读写、实时预览、多标签、最近文件、文档大纲和设置持久化。
+        MarkLite 是一个面向 Windows、macOS 和 Linux 的轻量 Markdown 编辑器，支持文件读写、实时预览、多标签、最近文件、文档大纲和设置持久化。
       </p>
       <div class="about-meta">
         <span>作者：Vazone</span>

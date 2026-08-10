@@ -202,3 +202,71 @@ fn count_markdown_resources(markdown: &str) -> (usize, usize) {
         },
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{calculate_stats, extract_outline, render_markdown_to_html};
+
+    #[test]
+    fn renders_tables_and_task_lists() {
+        let html =
+            render_markdown_to_html("- [x] Done\n\n| A | B |\n| - | - |\n| 1 | 2 |").unwrap();
+        assert!(html.contains("<table>"));
+        assert!(html.contains("checkbox"));
+    }
+
+    #[test]
+    fn removes_script_tags() {
+        let html = render_markdown_to_html("<script>alert(1)</script>\n\n# Safe").unwrap();
+        assert!(!html.contains("<script>"));
+        assert!(html.contains("<h1"));
+    }
+
+    #[test]
+    fn wraps_markdown_link_and_image_targets_for_typed_resolution() {
+        let html = render_markdown_to_html(
+            "[Local](active/card.md#part) ![Image](images/a%20b.png) [Bad](javascript:alert(1))",
+        )
+        .unwrap();
+
+        assert!(html.contains("href=\"marklite:active%2Fcard%2Emd%23part\""));
+        assert!(html.contains("src=\"marklite:images%2Fa%2520b%2Epng\""));
+        assert!(html.contains("href=\"marklite:javascript%3Aalert%281%29\""));
+    }
+
+    #[test]
+    fn extracts_outline() {
+        let outline = extract_outline("# A\nText\n### B");
+        assert_eq!(outline.len(), 2);
+        assert_eq!(outline[1].level, 3);
+    }
+
+    #[test]
+    fn calculates_stats() {
+        let stats = calculate_stats("# Title\n![img](x.png)\n[site](https://example.com)");
+        assert_eq!(stats.heading_count, 1);
+        assert_eq!(stats.image_count, 1);
+        assert_eq!(stats.link_count, 1);
+    }
+
+    #[test]
+    fn counts_only_parsed_link_and_image_events() {
+        let markdown = r#"
+[inline **label**](https://a.example)
+[reference][site]
+<https://b.example>
+[![nested](image.png)](https://c.example)
+![reference image][logo]
+`[code](https://ignored.example)`
+\[escaped](https://ignored.example)
+
+[site]: https://reference.example
+[logo]: logo.png
+"#;
+
+        let stats = calculate_stats(markdown);
+
+        assert_eq!(stats.link_count, 4);
+        assert_eq!(stats.image_count, 2);
+    }
+}

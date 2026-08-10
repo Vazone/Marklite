@@ -11,24 +11,8 @@ MarkLite_Rust_Windows_Markdown_Editor_开发大纲.md
 !.env.example
 coverage/
 .vite/
+tmp/
 *.tsbuildinfo
 Thumbs.db
 Desktop.ini
 .DS_Store
-
-# Source-only remote branch exclusions
-AGENTS.md
-Changelogs/
-TaskCards/
-docs/
-SECURITY.md
-vitest.config.ts
-**/*.test.ts
-**/*.test.js
-**/*.test.svelte
-**/*.spec.ts
-**/*.spec.js
-**/*.spec.svelte
-src/test/
-scripts/check-governance.mjs
-scripts/test-*.ps1
