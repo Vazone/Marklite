@@ -35,12 +35,19 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-rows: 56px 38px auto 1fr auto;
+  grid-template-areas:
+    'titlebar'
+    'tabbar'
+    'toolbar'
+    'workspace'
+    'statusbar';
+  grid-template-rows: 56px 38px auto minmax(0, 1fr) auto;
   height: 100%;
   background: var(--bg-primary);
 }
 
 .titlebar {
+  grid-area: titlebar;
   display: grid;
   grid-template-columns: minmax(240px, 1fr) auto auto;
   align-items: center;
@@ -148,6 +155,7 @@ button {
 }
 
 .tabbar {
+  grid-area: tabbar;
   display: flex;
   align-items: end;
   min-width: 0;
@@ -310,6 +318,7 @@ button {
 }
 
 .markdown-toolbar {
+  grid-area: toolbar;
   height: 38px;
   padding: 3px 12px;
   border-bottom: 1px solid var(--border-color);
@@ -317,6 +326,7 @@ button {
 }
 
 .workspace {
+  grid-area: workspace;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   min-height: 0;
@@ -609,6 +619,7 @@ button {
 }
 
 .statusbar {
+  grid-area: statusbar;
   display: flex;
   align-items: center;
   gap: 14px;

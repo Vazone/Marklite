@@ -66,7 +66,6 @@
   let unlistenDrop: (() => void) | undefined;
   let unlistenSingleInstance: (() => void) | undefined;
   let unlistenCloseRequested: (() => void) | undefined;
-  let allowNativeClose = false;
   let allowBrowserUnload = false;
   let exitPrompt: ExitPromptState | null = null;
   const initializationStartedAt = performance.now();
@@ -302,10 +301,6 @@
   async function setupCloseProtection() {
     try {
       unlistenCloseRequested = await getCurrentWindow().onCloseRequested((event) => {
-        if (allowNativeClose) {
-          allowNativeClose = false;
-          return;
-        }
         exitProtection.handleCloseRequest(() => event.preventDefault());
       });
     } catch (error) {
@@ -581,18 +576,15 @@
     }
     await persistSession(get(settingsStore).restoreLastSession, currentSessionSnapshot(get(documentStore)));
 
-    allowNativeClose = true;
     allowBrowserUnload = true;
     try {
-      await getCurrentWindow().close();
+      await getCurrentWindow().destroy();
     } catch (error) {
-      allowNativeClose = false;
       allowBrowserUnload = false;
       throw error;
     }
 
     window.setTimeout(() => {
-      allowNativeClose = false;
       allowBrowserUnload = false;
     }, 500);
   }
