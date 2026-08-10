@@ -74,7 +74,7 @@ jobs:
         run: npm run package:windows
 
       - name: Upload Windows release candidate
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: marklite-windows-x64
           path: |
@@ -129,7 +129,7 @@ jobs:
           cp "$deb" "release-assets/MarkLite_${version}_linux_amd64.deb"
 
       - name: Upload Linux release candidates
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: marklite-linux-x64
           path: release-assets/*
@@ -184,7 +184,7 @@ jobs:
           cp "$dmg" "release-assets/MarkLite_${version}_macos_${{ matrix.suffix }}.dmg"
 
       - name: Upload macOS release candidate
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: marklite-macos-${{ matrix.suffix }}
           path: release-assets/*
