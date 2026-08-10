@@ -57,6 +57,8 @@ export function createExitProtectionController(callbacks: ExitProtectionCallback
     publishPrompt(true, busyLabel);
     try {
       await callbacks.closeWindow();
+      phase = 'idle';
+      promptDocuments = [];
       callbacks.onPromptChange(null);
       return true;
     } catch (error) {
