@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MarkLite</title>
+  </head>
+  <body>
+    <div id="app">
+      <main
+        id="marklite-boot-shell"
+        role="status"
+        aria-live="polite"
+        style="min-height: 100%; display: grid; place-content: center; gap: 10px; padding: 32px; background: #171b18; color: #e7ece8; font-family: 'Segoe UI', system-ui, sans-serif; text-align: center"
+      >
+        <strong style="font-size: 22px">MarkLite</strong>
+        <span>正在启动编辑器…</span>
+        <noscript>启动失败：当前 WebView 未执行 JavaScript。</noscript>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
