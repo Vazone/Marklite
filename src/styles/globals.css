@@ -739,14 +739,21 @@ button {
 
 .about-dialog {
   width: min(560px, calc(100vw - 36px));
+  overflow-x: hidden;
+  overflow-y: auto;
   padding-bottom: 18px;
 }
 
-.about-dialog > p {
-  margin: 0;
+.about-description {
+  display: grid;
+  gap: 8px;
   padding: 0 22px;
+}
+
+.about-description p {
+  margin: 0;
   color: var(--text-secondary);
-  line-height: 1.7;
+  line-height: 1.6;
 }
 
 .about-meta {
@@ -805,6 +812,8 @@ button {
 }
 
 .about-diagnostics p {
+  display: grid;
+  gap: 5px;
   margin: 0;
   color: var(--text-secondary);
   font-size: 0.82rem;
