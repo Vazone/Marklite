@@ -150,6 +150,89 @@ fn macos_print_layout(options: &ExportOptions) -> MacosPrintLayout {
     }
 }
 
+#[cfg(target_os = "macos")]
+use objc2::{AnyThread, DefinedClass};
+#[cfg(target_os = "macos")]
+use objc2_foundation::{NSObject, NSObjectProtocol};
+
+#[cfg(target_os = "macos")]
+struct MacosPrintCompletionIvars {
+    sender: std::sync::Mutex<Option<mpsc::Sender<Result<(), AppError>>>>,
+    retained_self: std::sync::atomic::AtomicPtr<objc2::runtime::AnyObject>,
+}
+
+#[cfg(target_os = "macos")]
+objc2::define_class!(
+    // SAFETY: NSObject has no subclassing requirements. The delegate stores only
+    // thread-safe Rust state because AppKit may invoke the completion selector on
+    // its detached printing thread.
+    #[unsafe(super = NSObject)]
+    #[name = "MarkLitePdfPrintCompletionDelegate"]
+    #[ivars = MacosPrintCompletionIvars]
+    struct MacosPrintCompletionDelegate;
+
+    unsafe impl NSObjectProtocol for MacosPrintCompletionDelegate {}
+
+    impl MacosPrintCompletionDelegate {
+        // SAFETY: The selector signature is the one required by
+        // NSPrintOperation::runOperationModalForWindow:delegate:didRunSelector:contextInfo:.
+        #[unsafe(method(printOperationDidRun:success:contextInfo:))]
+        fn print_operation_did_run(
+            &self,
+            _operation: &objc2_app_kit::NSPrintOperation,
+            success: bool,
+            _context_info: *mut std::ffi::c_void,
+        ) {
+            let result = if success {
+                Ok(())
+            } else {
+                Err(AppError::new(
+                    "PDF_PRINT_FAILED",
+                    "macOS 打印操作未生成 PDF",
+                ))
+            };
+            self.complete(result);
+        }
+    }
+);
+
+#[cfg(target_os = "macos")]
+impl MacosPrintCompletionDelegate {
+    fn new(sender: mpsc::Sender<Result<(), AppError>>) -> objc2::rc::Retained<Self> {
+        let this = Self::alloc().set_ivars(MacosPrintCompletionIvars {
+            sender: std::sync::Mutex::new(Some(sender)),
+            retained_self: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
+        });
+        let delegate: objc2::rc::Retained<Self> = unsafe { objc2::msg_send![super(this), init] };
+        let retained_any: objc2::rc::Retained<objc2::runtime::AnyObject> = delegate.clone().into();
+        delegate.ivars().retained_self.store(
+            objc2::rc::Retained::into_raw(retained_any),
+            Ordering::Release,
+        );
+        delegate
+    }
+
+    fn complete(&self, result: Result<(), AppError>) {
+        let sender = match self.ivars().sender.lock() {
+            Ok(mut slot) => slot.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(sender) = sender {
+            let _ = sender.send(result);
+        }
+
+        let retained_self = self
+            .ivars()
+            .retained_self
+            .swap(std::ptr::null_mut(), Ordering::AcqRel);
+        if !retained_self.is_null() {
+            drop(unsafe {
+                objc2::rc::Retained::<objc2::runtime::AnyObject>::from_raw(retained_self)
+            });
+        }
+    }
+}
+
 pub async fn export_pdf(
     app: tauri::AppHandle,
     request: &ExportRequest,
@@ -496,7 +579,7 @@ async fn print_to_pdf(
     pdf_path: PathBuf,
     options: &ExportOptions,
 ) -> Result<(), AppError> {
-    use objc2::runtime::NSObjectProtocol;
+    use objc2::{runtime::AnyObject, runtime::NSObjectProtocol};
     use objc2_app_kit::{
         NSPaperOrientation, NSPrintInfo, NSPrintJobSavingURL, NSPrintSaveJob,
         NSPrintingPaginationMode,
@@ -505,66 +588,81 @@ async fn print_to_pdf(
     use objc2_web_kit::WKWebView;
 
     let (sender, receiver) = mpsc::channel::<Result<(), AppError>>();
+    let delegate = MacosPrintCompletionDelegate::new(sender);
+    let callback_delegate = delegate.clone();
     let settings = options.clone();
     let output_path = pdf_path.clone();
-    window
-        .with_webview(move |webview| unsafe {
-            let view = &*(webview.inner() as *const WKWebView);
-            if !view.respondsToSelector(objc2::sel!(printOperationWithPrintInfo:)) {
-                let _ = sender.send(Err(AppError::new(
-                    "PDF_PLATFORM_UNSUPPORTED",
-                    "macOS 11 或更高版本才支持 PDF 导出",
-                )));
-                return;
-            }
+    let schedule_result = window.with_webview(move |webview| unsafe {
+        let view = &*(webview.inner() as *const WKWebView);
+        if !view.respondsToSelector(objc2::sel!(printOperationWithPrintInfo:)) {
+            callback_delegate.complete(Err(AppError::new(
+                "PDF_PLATFORM_UNSUPPORTED",
+                "macOS 11 或更高版本才支持 PDF 导出",
+            )));
+            return;
+        }
+        let Some(document_window) = view.window() else {
+            callback_delegate.complete(Err(AppError::new(
+                "PDF_PLATFORM_ADAPTER_FAILED",
+                "macOS PDF 渲染面没有可用窗口",
+            )));
+            return;
+        };
 
-            let print_info = NSPrintInfo::sharedPrintInfo().copy();
-            let layout = macos_print_layout(&settings);
-            print_info.setPaperSize(NSSize::new(
-                layout.paper_width_points,
-                layout.paper_height_points,
-            ));
-            print_info.setOrientation(if layout.landscape {
-                NSPaperOrientation::Landscape
-            } else {
-                NSPaperOrientation::Portrait
-            });
-            print_info.setTopMargin(layout.margin_points);
-            print_info.setBottomMargin(layout.margin_points);
-            print_info.setLeftMargin(layout.margin_points);
-            print_info.setRightMargin(layout.margin_points);
-            print_info.setHorizontallyCentered(false);
-            print_info.setVerticallyCentered(false);
-            print_info.setHorizontalPagination(NSPrintingPaginationMode::Fit);
-            print_info.setVerticalPagination(NSPrintingPaginationMode::Automatic);
-            print_info.setJobDisposition(NSPrintSaveJob);
+        let print_info = NSPrintInfo::sharedPrintInfo().copy();
+        let layout = macos_print_layout(&settings);
+        print_info.setPaperSize(NSSize::new(
+            layout.paper_width_points,
+            layout.paper_height_points,
+        ));
+        print_info.setOrientation(if layout.landscape {
+            NSPaperOrientation::Landscape
+        } else {
+            NSPaperOrientation::Portrait
+        });
+        print_info.setTopMargin(layout.margin_points);
+        print_info.setBottomMargin(layout.margin_points);
+        print_info.setLeftMargin(layout.margin_points);
+        print_info.setRightMargin(layout.margin_points);
+        print_info.setHorizontallyCentered(false);
+        print_info.setVerticallyCentered(false);
+        print_info.setHorizontalPagination(NSPrintingPaginationMode::Fit);
+        print_info.setVerticalPagination(NSPrintingPaginationMode::Automatic);
+        print_info.setJobDisposition(NSPrintSaveJob);
 
-            let output_string = NSString::from_str(output_path.to_string_lossy().as_ref());
-            let output_url = NSURL::fileURLWithPath(&output_string);
-            print_info
-                .dictionary()
-                .insert(NSPrintJobSavingURL, &output_url);
+        let output_string = NSString::from_str(output_path.to_string_lossy().as_ref());
+        let output_url = NSURL::fileURLWithPath(&output_string);
+        print_info
+            .dictionary()
+            .insert(NSPrintJobSavingURL, &output_url);
 
-            let operation = view.printOperationWithPrintInfo(&print_info);
-            operation.setShowsPrintPanel(false);
-            operation.setShowsProgressPanel(false);
-            operation.setCanSpawnSeparateThread(false);
-            let result = if operation.runOperation() {
-                Ok(())
-            } else {
-                Err(AppError::new(
-                    "PDF_PRINT_FAILED",
-                    "macOS 打印操作未生成 PDF",
-                ))
-            };
-            let _ = sender.send(result);
-        })
-        .map_err(|error| AppError::new("PDF_PLATFORM_ADAPTER_FAILED", error.to_string()))?;
+        let operation = view.printOperationWithPrintInfo(&print_info);
+        operation.setShowsPrintPanel(false);
+        operation.setShowsProgressPanel(false);
+        // WKPrintingView resolves real pagination from the detached print thread;
+        // running this operation synchronously here would block the UI thread that
+        // must deliver those page-rectangle callbacks.
+        operation.setCanSpawnSeparateThread(true);
+        let delegate_object: objc2::rc::Retained<AnyObject> = callback_delegate.clone().into();
+        operation.runOperationModalForWindow_delegate_didRunSelector_contextInfo(
+            &document_window,
+            Some(&*delegate_object),
+            Some(objc2::sel!(printOperationDidRun:success:contextInfo:)),
+            std::ptr::null_mut(),
+        );
+    });
+    if let Err(error) = schedule_result {
+        delegate.complete(Err(AppError::new(
+            "PDF_PLATFORM_ADAPTER_FAILED",
+            error.to_string(),
+        )));
+    }
     let print_result =
         tauri::async_runtime::spawn_blocking(move || receiver.recv_timeout(PRINT_TIMEOUT))
             .await
             .map_err(|_| AppError::new("PDF_PRINT_FAILED", "macOS PDF 等待任务异常结束"))?
             .map_err(|_| AppError::new("PDF_PRINT_TIMEOUT", "macOS PDF 导出超过 45 秒"))?;
+    drop(delegate);
     print_result?;
     if !pdf_path.is_file() {
         return Err(AppError::new(
@@ -811,5 +909,19 @@ mod tests {
         assert_eq!(letter.paper_height_points, 792.0);
         assert_eq!(letter.margin_points, 108.0);
         assert!(letter.landscape);
+    }
+
+    #[test]
+    fn macos_adapter_never_runs_appkit_printing_on_the_ui_thread() {
+        let source = include_str!("pdf_export_service.rs");
+        let adapter = source
+            .split("#[cfg(target_os = \"macos\")]\nasync fn print_to_pdf")
+            .nth(1)
+            .and_then(|source| source.split("#[cfg(target_os = \"linux\")]").next())
+            .expect("macOS PDF adapter must remain isolated");
+        assert!(!adapter.contains(&["setCanSpawnSeparateThread", "(false)"].concat()));
+        assert!(!adapter.contains(&["operation.", "runOperation()"].concat()));
+        assert!(adapter.contains("setCanSpawnSeparateThread(true)"));
+        assert!(adapter.contains("runOperationModalForWindow_delegate_didRunSelector_contextInfo"));
     }
 }
