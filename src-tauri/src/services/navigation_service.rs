@@ -621,13 +621,17 @@ mod tests {
         let current = dir.join("index.md");
         let image = dir.join("pixel.png");
         let encoded_image = dir.join("pixel space.png");
+        let nested_dir = dir.join("images");
+        let nested_image = nested_dir.join("中文 image.png");
         let svg = dir.join("vector.svg");
+        fs::create_dir_all(&nested_dir).unwrap();
         fs::write(&current, "index").unwrap();
         let png = STANDARD
             .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
             .unwrap();
         fs::write(&image, &png).unwrap();
         fs::write(&encoded_image, &png).unwrap();
+        fs::write(&nested_image, &png).unwrap();
         fs::write(&svg, "<svg/>").unwrap();
 
         let disabled =
@@ -648,6 +652,24 @@ mod tests {
         .unwrap()
         .data_url
         .starts_with("data:image/png;base64,"));
+        assert!(load_local_image_with_permission(
+            Some(&current.to_string_lossy()),
+            "marklite:images%2F%E4%B8%AD%E6%96%87%20image%2Epng",
+            true
+        )
+        .unwrap()
+        .data_url
+        .starts_with("data:image/png;base64,"));
+        assert_eq!(
+            load_local_image_with_permission(
+                Some(&current.to_string_lossy()),
+                "marklite:%E4%B8%AD%E6%96%87%20image%2Epng",
+                true
+            )
+            .unwrap_err()
+            .code,
+            "FILE_NOT_FOUND"
+        );
         assert_eq!(
             load_local_image_with_permission(Some(&current.to_string_lossy()), "vector.svg", true)
                 .unwrap_err()

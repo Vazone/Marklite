@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { onDestroy } from 'svelte';
   import type { AppSettings } from '../../lib/tauriApi';
   import { api, openExternalLink, toAppError } from '../../lib/tauriApi';
   import { executeMarkdownTarget } from '../../lib/markdownNavigation';
@@ -14,12 +14,21 @@
   let previewHost: HTMLElement;
   let resourceRevision = 0;
   let resourceKey = '';
+  let scheduledResourceKey: string | null = null;
+  let preparedHtml = '';
+
+  const IMAGE_LOAD_CONCURRENCY = 4;
 
   $: resourceKey = `${documentPath ?? ''}\u0000${settings.allowLocalImages}\u0000${html}`;
 
-  $: if (previewHost) {
+  $: if (previewHost && resourceKey !== scheduledResourceKey) {
+    scheduledResourceKey = resourceKey;
     schedulePreviewPreparation(html, documentPath, settings.allowLocalImages);
   }
+
+  onDestroy(() => {
+    resourceRevision += 1;
+  });
 
   export function syncToEditorScroll(position: EditorScrollPosition | undefined) {
     if (!settings.syncScroll || !previewHost || !position) return;
@@ -81,38 +90,81 @@
     allowLocalImages: boolean,
     revision: number
   ) {
-    void currentHtml;
-    await tick();
-    if (!previewHost || revision !== resourceRevision) return;
-    assignHeadingIds();
+    const template = createPreviewTemplate(currentHtml);
+    assignHeadingIds(template.content);
+    const images = Array.from(template.content.querySelectorAll<HTMLImageElement>('img[src]'));
 
-    const images = Array.from(previewHost.querySelectorAll<HTMLImageElement>('img[src]'));
-    await Promise.all(
-      images.map(async (image) => {
+    if (images.length === 0) {
+      commitPreparedPreview(template.innerHTML, revision);
+      return;
+    }
+
+    if (!allowLocalImages) {
+      for (const image of images) {
+        replaceWithImagePlaceholder(image, '本地图片已禁用，可在设置中启用');
+      }
+      commitPreparedPreview(template.innerHTML, revision);
+      return;
+    }
+
+    const loadingTemplate = template.cloneNode(true) as HTMLTemplateElement;
+    for (const image of loadingTemplate.content.querySelectorAll<HTMLImageElement>('img[src]')) {
+      replaceWithImagePlaceholder(image, '正在加载本地图片');
+    }
+    commitPreparedPreview(loadingTemplate.innerHTML, revision);
+
+    await prepareLocalImages(images, currentDocumentPath, revision);
+    commitPreparedPreview(template.innerHTML, revision);
+  }
+
+  function createPreviewTemplate(currentHtml: string): HTMLTemplateElement {
+    const template = document.createElement('template');
+    template.innerHTML = currentHtml;
+    return template;
+  }
+
+  async function prepareLocalImages(
+    images: HTMLImageElement[],
+    currentDocumentPath: string | null,
+    revision: number
+  ) {
+    let nextIndex = 0;
+    const workerCount = Math.min(IMAGE_LOAD_CONCURRENCY, images.length);
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (revision === resourceRevision) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= images.length) return;
+
+        const image = images[index];
         const source = image.getAttribute('src');
-        if (!source) return;
-        image.removeAttribute('src');
-        if (!allowLocalImages) {
-          replaceWithImagePlaceholder(image, '本地图片已禁用，可在设置中启用');
-          return;
+        if (!source) {
+          replaceWithImagePlaceholder(image, '图片地址为空');
+          continue;
         }
+
         try {
           const loaded = await api.loadLocalImage(currentDocumentPath, source);
-          if (revision !== resourceRevision || !image.isConnected) return;
+          if (revision !== resourceRevision) return;
           image.src = loaded.dataUrl;
           image.title = loaded.path;
         } catch (error) {
-          if (revision === resourceRevision && image.isConnected) {
-            replaceWithImagePlaceholder(image, toAppError(error).message);
-          }
+          if (revision !== resourceRevision) return;
+          replaceWithImagePlaceholder(image, toAppError(error).message);
         }
-      })
-    );
+      }
+    });
+    await Promise.all(workers);
   }
 
-  function assignHeadingIds() {
+  function commitPreparedPreview(nextHtml: string, revision: number) {
+    if (revision !== resourceRevision) return;
+    preparedHtml = nextHtml;
+  }
+
+  function assignHeadingIds(root: ParentNode) {
     const seen = new Map<string, number>();
-    for (const heading of previewHost.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')) {
+    for (const heading of root.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')) {
       if (heading.id) continue;
       const base = slugify(heading.textContent ?? '') || 'section';
       const count = (seen.get(base) ?? 0) + 1;
@@ -148,14 +200,12 @@
   style:line-height={settings.lineHeight}
   on:click={handleClick}
 >
-  {#key resourceKey}
-    {#if html}
-      {@html html}
-    {:else}
-      <div class="preview-empty">
-        <h2>预览将在这里显示</h2>
-        <p>开始输入 Markdown 后会自动刷新。</p>
-      </div>
-    {/if}
-  {/key}
+  {#if html}
+    {@html preparedHtml}
+  {:else}
+    <div class="preview-empty">
+      <h2>预览将在这里显示</h2>
+      <p>开始输入 Markdown 后会自动刷新。</p>
+    </div>
+  {/if}
 </section>
