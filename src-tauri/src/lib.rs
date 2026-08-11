@@ -3,9 +3,9 @@ mod models;
 mod services;
 mod utils;
 
+use commands::export_commands::export_document;
 use commands::file_commands::{
-    export_html_file, get_startup_file_arg, open_markdown_file, save_markdown_file,
-    show_in_file_manager,
+    get_startup_file_arg, open_markdown_file, save_markdown_file, show_in_file_manager,
 };
 use commands::markdown_commands::render_markdown;
 use commands::navigation_commands::{load_local_image, resolve_markdown_target};
@@ -84,7 +84,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_markdown_file,
             save_markdown_file,
-            export_html_file,
+            export_document,
             get_startup_file_arg,
             show_in_file_manager,
             render_markdown,

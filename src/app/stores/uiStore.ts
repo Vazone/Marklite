@@ -4,6 +4,11 @@ import {
   DEFAULT_SPLIT_RATIO,
   splitDropMode
 } from '../../lib/splitPane';
+import {
+  clampExpandedSidebarWidth,
+  DEFAULT_SIDEBAR_WIDTH,
+  commitSidebarWidth as sidebarDropResult
+} from '../../lib/sidebarResize';
 
 export type LayoutMode = 'edit' | 'split' | 'preview';
 export type SidebarTab = 'recent' | 'outline' | 'info';
@@ -20,6 +25,8 @@ export type UiState = {
   splitRatio: number;
   lastSplitRatio: number;
   sidebarVisible: boolean;
+  sidebarWidth: number;
+  lastSidebarWidth: number;
   sidebarTab: SidebarTab;
   settingsOpen: boolean;
   commandPaletteOpen: boolean;
@@ -36,6 +43,8 @@ const store = writable<UiState>({
   splitRatio: DEFAULT_SPLIT_RATIO,
   lastSplitRatio: DEFAULT_SPLIT_RATIO,
   sidebarVisible: true,
+  sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
+  lastSidebarWidth: DEFAULT_SIDEBAR_WIDTH,
   sidebarTab: 'recent',
   settingsOpen: false,
   commandPaletteOpen: false,
@@ -87,10 +96,43 @@ export const uiActions = {
     });
   },
   toggleSidebar() {
-    store.update((state) => ({ ...state, sidebarVisible: !state.sidebarVisible }));
+    store.update((state) => ({
+      ...state,
+      sidebarVisible: !state.sidebarVisible,
+      sidebarWidth: !state.sidebarVisible ? state.lastSidebarWidth : state.sidebarWidth
+    }));
   },
   setSidebarVisible(sidebarVisible: boolean) {
-    store.update((state) => ({ ...state, sidebarVisible }));
+    store.update((state) => ({
+      ...state,
+      sidebarVisible,
+      sidebarWidth: sidebarVisible ? state.lastSidebarWidth : state.sidebarWidth
+    }));
+  },
+  setSidebarWidth(sidebarWidth: number) {
+    store.update((state) => ({ ...state, sidebarWidth }));
+  },
+  commitSidebarWidth(rawWidth: number, visibleWidth: number, workspaceWidth: number) {
+    store.update((state) => {
+      const result = sidebarDropResult(rawWidth, workspaceWidth);
+      if (result.mode === 'collapse') {
+        return { ...state, sidebarVisible: false, sidebarWidth: state.lastSidebarWidth };
+      }
+      const sidebarWidth = clampExpandedSidebarWidth(visibleWidth, workspaceWidth);
+      return {
+        ...state,
+        sidebarVisible: true,
+        sidebarWidth,
+        lastSidebarWidth: sidebarWidth
+      };
+    });
+  },
+  collapseSidebar() {
+    store.update((state) => ({
+      ...state,
+      sidebarVisible: false,
+      sidebarWidth: state.lastSidebarWidth
+    }));
   },
   setSidebarTab(sidebarTab: SidebarTab) {
     store.update((state) => ({ ...state, sidebarTab }));

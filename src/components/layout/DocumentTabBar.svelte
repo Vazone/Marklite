@@ -18,14 +18,17 @@
   const menuWidth = 210;
   const menuHeight = 116;
   const viewportPadding = 8;
+  let tabbarElement: HTMLDivElement | null = null;
   let contextMenu: ContextMenuState | null = null;
   let menuElement: HTMLDivElement | null = null;
   let triggerElement: HTMLButtonElement | null = null;
+  let revealRequest = 0;
 
   $: menuTabIndex = contextMenu ? tabs.findIndex((tab) => tab.id === contextMenu?.tabId) : -1;
   $: canCloseOthers = menuTabIndex >= 0 && tabs.length > 1;
   $: canCloseRight = menuTabIndex >= 0 && menuTabIndex < tabs.length - 1;
   $: if (contextMenu && menuTabIndex < 0) closeContextMenu(false);
+  $: void revealActiveTab(activeTabId, tabs.length);
 
   onMount(() => {
     const onPointerDown = (event: PointerEvent) => {
@@ -102,9 +105,48 @@
     closeContextMenu(false);
     action(tabId);
   }
+
+  async function revealActiveTab(tabId: string | null, tabCount: number) {
+    const request = ++revealRequest;
+    if (!tabId || tabCount === 0) return;
+
+    await tick();
+    if (request !== revealRequest || tabId !== activeTabId) return;
+
+    const activeElement = [...(tabbarElement?.querySelectorAll<HTMLElement>('.document-tab') ?? [])].find(
+      (element) => element.dataset.tabId === tabId
+    );
+    activeElement?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }
+
+  function handleWheel(event: WheelEvent) {
+    const container = event.currentTarget as HTMLDivElement;
+    const maximumScrollLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+    if (maximumScrollLeft === 0) return;
+
+    const rawDelta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    if (!Number.isFinite(rawDelta) || rawDelta === 0) return;
+
+    const deltaScale = event.deltaMode === 1 ? 32 : event.deltaMode === 2 ? container.clientWidth : 1;
+    const currentScrollLeft = Math.max(0, Math.min(container.scrollLeft, maximumScrollLeft));
+    const nextScrollLeft = Math.max(
+      0,
+      Math.min(currentScrollLeft + rawDelta * deltaScale, maximumScrollLeft)
+    );
+    if (nextScrollLeft === currentScrollLeft) return;
+
+    container.scrollLeft = nextScrollLeft;
+    event.preventDefault();
+  }
 </script>
 
-<div class="tabbar" role="tablist" aria-label="打开的文档">
+<div
+  bind:this={tabbarElement}
+  class="tabbar"
+  role="tablist"
+  aria-label="打开的文档"
+  on:wheel|nonpassive={handleWheel}
+>
   {#each tabs as tab}
     <div
       class="document-tab"

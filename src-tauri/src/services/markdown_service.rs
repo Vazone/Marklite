@@ -1,4 +1,3 @@
-use html_escape::encode_text;
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag};
 
@@ -63,7 +62,7 @@ fn encoded_target(target: CowStr<'_>) -> CowStr<'_> {
     .into()
 }
 
-fn markdown_options() -> Options {
+pub(crate) fn markdown_options() -> Options {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_FOOTNOTES);
@@ -114,34 +113,6 @@ pub fn calculate_stats(markdown: &str) -> DocumentStats {
         link_count,
         image_count,
     }
-}
-
-pub fn render_standalone_html(title: &str, markdown: &str) -> Result<String, AppError> {
-    let body = render_markdown_html(markdown, false)?;
-    let safe_title = encode_text(title);
-    Ok(format!(
-        r#"<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{safe_title}</title>
-  <style>
-    body {{ margin: 0; color: #1f2328; background: #ffffff; font: 16px/1.7 "Segoe UI", system-ui, sans-serif; }}
-    main {{ max-width: 860px; margin: 0 auto; padding: 48px 28px; }}
-    pre {{ overflow: auto; padding: 16px; border-radius: 8px; background: #f6f8fa; }}
-    code {{ font-family: "Cascadia Code", Consolas, monospace; }}
-    table {{ border-collapse: collapse; width: 100%; }}
-    th, td {{ border: 1px solid #d0d7de; padding: 8px 10px; }}
-    blockquote {{ margin-left: 0; padding-left: 16px; color: #57606a; border-left: 4px solid #d0d7de; }}
-    img {{ max-width: 100%; }}
-  </style>
-</head>
-<body>
-  <main>{body}</main>
-</body>
-</html>"#
-    ))
 }
 
 fn parse_heading(line: &str) -> Option<(u8, String)> {

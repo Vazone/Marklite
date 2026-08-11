@@ -92,6 +92,48 @@ export type LocalImageDto = {
   path: string;
 };
 
+export type ExportFormat = 'html' | 'pdf' | 'docx';
+export type ExportPaperSize = 'a4' | 'letter';
+export type ExportOrientation = 'portrait' | 'landscape';
+export type ExportMarginPreset = 'narrow' | 'normal' | 'wide';
+
+export type ExportSnapshot = {
+  jobId: string;
+  tabId: string;
+  contentRevision: number;
+  sourcePath: string | null;
+  title: string;
+  content: string;
+};
+
+export type ExportOptions = {
+  paperSize: ExportPaperSize;
+  orientation: ExportOrientation;
+  margin: ExportMarginPreset;
+  includeTitle: boolean;
+  includeLocalImages: boolean;
+};
+
+export type ExportRequest = {
+  snapshot: ExportSnapshot;
+  targetPath: string;
+  format: ExportFormat;
+  options: ExportOptions;
+};
+
+export type ExportWarning = {
+  code: string;
+  message: string;
+  target: string | null;
+};
+
+export type ExportResult = {
+  jobId: string;
+  format: ExportFormat;
+  path: string;
+  warnings: ExportWarning[];
+};
+
 export type AppError = {
   code: string;
   message: string;
@@ -162,14 +204,22 @@ export async function pickMarkdownSavePath(defaultPath?: string | null): Promise
   });
 }
 
-export async function pickHtmlSavePath(defaultPath?: string | null): Promise<string | null> {
+export async function pickExportSavePath(
+  format: ExportFormat,
+  defaultPath?: string | null
+): Promise<string | null> {
   if (!isTauriRuntime()) {
-    throw new Error('导出 HTML 需要在 Tauri 桌面环境中使用');
+    throw new Error('导出文件需要在 Tauri 桌面环境中使用');
   }
 
+  const labels: Record<ExportFormat, string> = {
+    html: 'HTML',
+    pdf: 'PDF',
+    docx: 'Word 文档'
+  };
   return save({
     defaultPath: defaultPath ?? undefined,
-    filters: [{ name: 'HTML', extensions: ['html'] }]
+    filters: [{ name: labels[format], extensions: [format] }]
   });
 }
 
@@ -209,8 +259,8 @@ export const api = {
   openMarkdownFile: (path: string) => invokeCommand<DocumentOperationDto>('open_markdown_file', { path }),
   saveMarkdownFile: (path: string, content: string) =>
     invokeCommand<DocumentOperationDto>('save_markdown_file', { path, content }),
-  exportHtmlFile: (path: string, title: string, content: string) =>
-    invokeCommand<void>('export_html_file', { path, title, content }),
+  exportDocument: (request: ExportRequest) =>
+    invokeCommand<ExportResult>('export_document', { request }),
   getStartupFileArg: () => invokeCommand<string | null>('get_startup_file_arg'),
   renderMarkdown: (content: string) => invokeCommand<RenderedMarkdownDto>('render_markdown', { content }),
   resolveMarkdownTarget: (documentPath: string | null, target: string) =>

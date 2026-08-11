@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Clock3, FileText, FolderOpen, Info, ListTree, Trash2 } from 'lucide-svelte';
+  import { Clock3, FileText, FolderOpen, Info, ListTree, PanelLeftClose, Trash2 } from 'lucide-svelte';
   import type { EditorTab } from '../../app/stores/documentStore';
   import type { RecentFileDto } from '../../lib/tauriApi';
   import type { SidebarTab } from '../../app/stores/uiStore';
@@ -20,6 +20,7 @@
   export let onRemoveRecent: (path: string) => void = () => {};
   export let onRevealRecent: (path: string) => void = () => {};
   export let onJumpToLine: (line: number) => void = () => {};
+  export let onCollapse: () => void = () => {};
 
   let contextMenu: RecentContextMenu | null = null;
 
@@ -77,6 +78,9 @@
     </button>
     <button type="button" class:active={activeSidebarTab === 'info'} title="文档信息" on:click={() => onTabChange('info')}>
       <Info size={16} />
+    </button>
+    <button type="button" class="sidebar-collapse-button" title="收起侧栏" aria-label="收起侧栏" on:click={onCollapse}>
+      <PanelLeftClose size={16} />
     </button>
   </div>
 
