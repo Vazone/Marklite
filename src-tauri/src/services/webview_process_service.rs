@@ -73,6 +73,7 @@ pub fn install_process_failed_monitor(
     Ok(())
 }
 
+#[cfg(any(windows, test))]
 pub fn process_failed_kind_code(kind: i32) -> &'static str {
     match kind {
         0 => "browserProcessExited",

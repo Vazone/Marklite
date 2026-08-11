@@ -29,7 +29,128 @@ use crate::{
 
 const MAX_EXPORT_CONTENT_BYTES: usize = 10 * 1024 * 1024;
 const MAX_EMBEDDED_RESOURCE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_PDF_READY_TOKEN_BYTES: usize = 128;
 static RESOURCE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+const PDF_READY_SCRIPT_TEMPLATE: &str = r#"<script>
+(() => {
+  'use strict';
+  const token = __MARKLITE_PDF_READY_TOKEN__;
+  const stageTimeoutMs = 8000;
+  const completed = [];
+  let terminalSent = false;
+
+  const send = (kind, stage, code = '', imageCount = 0, imageFailed = 0) => {
+    if (terminalSent) return;
+    const endpoint = kind === 'ready'
+      ? 'marklite-export://ready'
+      : 'marklite-export://error';
+    const params = new URLSearchParams({
+      token,
+      stage,
+      code,
+      completed: completed.join(','),
+      images: String(imageCount),
+      failed: String(imageFailed)
+    });
+    window.location.href = `${endpoint}?${params.toString()}`;
+    terminalSent = true;
+  };
+
+  const stageError = (code) => Object.assign(new Error(code), { code });
+  const errorCode = (error, fallback) => error && typeof error.code === 'string'
+    ? error.code
+    : fallback;
+  const bounded = (promise, timeoutCode, failureCode = timeoutCode.replace('_TIMEOUT', '_FAILED')) => new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(stageError(timeoutCode));
+    }, stageTimeoutMs);
+    Promise.resolve(promise).then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        reject(stageError(failureCode));
+      }
+    );
+  });
+
+  const waitForDom = () => document.readyState === 'loading'
+    ? new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }))
+    : Promise.resolve();
+
+  const waitForImage = (image) => {
+    if (typeof image.decode === 'function') return image.decode();
+    if (image.complete) {
+      return image.naturalWidth > 0
+        ? Promise.resolve()
+        : Promise.reject(stageError('PDF_IMAGE_DECODE_FAILED'));
+    }
+    return new Promise((resolve, reject) => {
+      image.addEventListener('load', resolve, { once: true });
+      image.addEventListener('error', () => reject(stageError('PDF_IMAGE_DECODE_FAILED')), { once: true });
+    });
+  };
+
+  (async () => {
+    try {
+      await bounded(waitForDom(), 'PDF_DOM_TIMEOUT');
+    } catch (error) {
+      send('error', 'pageLoaded', errorCode(error, 'PDF_DOM_FAILED'));
+      return;
+    }
+    completed.push('pageLoaded', 'domReady');
+
+    try {
+      await bounded(document.fonts ? document.fonts.ready : Promise.resolve(), 'PDF_FONT_TIMEOUT');
+    } catch (error) {
+      send('error', 'fontsSettled', errorCode(error, 'PDF_FONT_FAILED'));
+      return;
+    }
+    completed.push('fontsSettled');
+
+    const images = Array.from(document.images);
+    const imageResults = await Promise.all(images.map(async (image) => {
+      try {
+        await bounded(waitForImage(image), 'PDF_IMAGE_TIMEOUT', 'PDF_IMAGE_DECODE_FAILED');
+        return '';
+      } catch (error) {
+        return errorCode(error, 'PDF_IMAGE_DECODE_FAILED');
+      }
+    }));
+    const imageFailures = imageResults.filter(Boolean);
+    if (imageFailures.length > 0) {
+      const code = imageFailures.includes('PDF_IMAGE_TIMEOUT')
+        ? 'PDF_IMAGE_TIMEOUT'
+        : 'PDF_IMAGE_DECODE_FAILED';
+      send('error', 'imagesSettled', code, images.length, imageFailures.length);
+      return;
+    }
+    completed.push('imagesSettled');
+
+    try {
+      document.documentElement.getBoundingClientRect();
+      if (document.body) document.body.getBoundingClientRect();
+      window.getComputedStyle(document.documentElement).getPropertyValue('width');
+      await Promise.resolve();
+      void document.documentElement.scrollHeight;
+    } catch (_) {
+      send('error', 'layoutReady', 'PDF_LAYOUT_FAILED', images.length, 0);
+      return;
+    }
+    send('ready', 'layoutReady', '', images.length, 0);
+  })().catch(() => send('error', 'layoutReady', 'PDF_LAYOUT_FAILED'));
+})();
+</script>"#;
 
 #[derive(Debug, Clone)]
 enum SemanticNode {
@@ -64,7 +185,7 @@ pub fn export_html(request: &ExportRequest) -> Result<ExportResult, AppError> {
     let mut warnings = Vec::new();
     let document = parse_document(&request.snapshot.content);
     let body = render_html_body(&document, request, &mut warnings);
-    let html = standalone_html(request, &body, false);
+    let html = standalone_html(request, &body, None);
     write_export_target(request, html.as_bytes())?;
     Ok(result(request, warnings))
 }
@@ -84,13 +205,24 @@ pub fn export_docx(request: &ExportRequest) -> Result<ExportResult, AppError> {
     Ok(result(request, context.warnings))
 }
 
-pub fn prepare_pdf(request: &ExportRequest) -> Result<PreparedPdf, AppError> {
+pub fn prepare_pdf(request: &ExportRequest, ready_token: &str) -> Result<PreparedPdf, AppError> {
     validate_request(request)?;
+    if ready_token.is_empty()
+        || ready_token.len() > MAX_PDF_READY_TOKEN_BYTES
+        || !ready_token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err(AppError::new(
+            "INVALID_PDF_READY_TOKEN",
+            "PDF 导出任务缺少有效的内部就绪令牌",
+        ));
+    }
     let mut warnings = Vec::new();
     let document = parse_document(&request.snapshot.content);
     let body = render_html_body(&document, request, &mut warnings);
     Ok(PreparedPdf {
-        html: standalone_html(request, &body, true),
+        html: standalone_html(request, &body, Some(ready_token)),
         warnings,
     })
 }
@@ -415,7 +547,7 @@ fn reserve_export_resource(
     true
 }
 
-fn standalone_html(request: &ExportRequest, body: &str, pdf_ready: bool) -> String {
+fn standalone_html(request: &ExportRequest, body: &str, pdf_ready_token: Option<&str>) -> String {
     let safe_title = encode_text(&request.snapshot.title);
     let document_title = if request.options.include_title {
         format!(r#"<h1 class="document-title">{safe_title}</h1>"#)
@@ -435,17 +567,15 @@ fn standalone_html(request: &ExportRequest, body: &str, pdf_ready: bool) -> Stri
         ExportMarginPreset::Normal => "25.4mm",
         ExportMarginPreset::Wide => "38.1mm",
     };
-    let ready_script = if pdf_ready {
-        r#"<script>
-(() => {
-  const notify = () => { window.location.href = 'marklite-export://ready'; };
-  const images = Array.from(document.images).map((image) => image.decode ? image.decode().catch(() => undefined) : Promise.resolve());
-  Promise.all([document.fonts ? document.fonts.ready : Promise.resolve(), ...images]).then(() => requestAnimationFrame(() => requestAnimationFrame(notify)));
-})();
-</script>"#
-    } else {
-        ""
-    };
+    let ready_script = pdf_ready_token
+        .map(|token| {
+            PDF_READY_SCRIPT_TEMPLATE.replace(
+                "__MARKLITE_PDF_READY_TOKEN__",
+                &serde_json::to_string(token)
+                    .expect("serializing an internal PDF ready token cannot fail"),
+            )
+        })
+        .unwrap_or_default();
     format!(
         r#"<!doctype html>
 <html lang="zh-CN">
@@ -1238,13 +1368,53 @@ mod tests {
     fn prepares_a_bounded_pdf_ready_surface_without_application_ui() {
         let path = unique_path("pdf");
         let request = request(ExportFormat::Pdf, &path, "# Heading\n\nbody");
-        let prepared = prepare_pdf(&request).unwrap();
+        let prepared = prepare_pdf(&request, "test-ready-token").unwrap();
         assert!(prepared.html.contains("document.fonts.ready"));
         assert!(prepared.html.contains("image.decode"));
-        assert!(prepared.html.contains("requestAnimationFrame"));
+        assert!(!prepared.html.contains("requestAnimationFrame"));
+        assert!(prepared.html.contains("PDF_FONT_TIMEOUT"));
+        assert!(prepared.html.contains("PDF_IMAGE_TIMEOUT"));
+        assert!(prepared.html.contains("PDF_IMAGE_DECODE_FAILED"));
+        assert!(!prepared.html.contains("PDF_IMAGE_FAILED"));
         assert!(prepared.html.contains("marklite-export://ready"));
+        assert!(prepared.html.contains("marklite-export://error"));
+        assert!(!prepared.html.contains("marklite-export://progress"));
+        assert!(prepared.html.contains("completed: completed.join(',')"));
+        assert!(prepared.html.contains("let terminalSent = false"));
+        assert!(prepared.html.contains("test-ready-token"));
         assert!(!prepared.html.contains("sidebar-resize-separator"));
         assert!(!prepared.html.contains("markdown-toolbar"));
+    }
+
+    #[test]
+    fn rejects_invalid_pdf_ready_tokens() {
+        let path = unique_path("pdf");
+        let request = request(ExportFormat::Pdf, &path, "body");
+        assert_eq!(
+            prepare_pdf(&request, "token with spaces").unwrap_err().code,
+            "INVALID_PDF_READY_TOKEN"
+        );
+    }
+
+    #[test]
+    fn maps_pdf_page_options_into_the_standalone_surface() {
+        let path = unique_path("pdf");
+        let mut request = request(ExportFormat::Pdf, &path, "body");
+        request.options.paper_size = ExportPaperSize::A4;
+        request.options.orientation = ExportOrientation::Landscape;
+        request.options.margin = ExportMarginPreset::Wide;
+        let a4 = prepare_pdf(&request, "a4-landscape").unwrap();
+        assert!(a4
+            .html
+            .contains("@page { size: 297mm 210mm; margin: 38.1mm; }"));
+
+        request.options.paper_size = ExportPaperSize::Letter;
+        request.options.orientation = ExportOrientation::Portrait;
+        request.options.margin = ExportMarginPreset::Narrow;
+        let letter = prepare_pdf(&request, "letter-portrait").unwrap();
+        assert!(letter
+            .html
+            .contains("@page { size: 8.5in 11in; margin: 12.7mm; }"));
     }
 
     #[test]

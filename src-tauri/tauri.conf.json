@@ -43,7 +43,8 @@
     "shortDescription": "Lightweight Markdown editor",
     "longDescription": "MarkLite is a lightweight cross-platform Markdown editor built with Rust, Tauri and Svelte.",
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "minimumSystemVersion": "11.0"
     },
     "windows": {
       "nsis": {
