@@ -24,7 +24,7 @@
   export let onOpen: () => void = () => {};
   export let onSave: () => void = () => {};
   export let onSaveAs: () => void = () => {};
-  export let onExportHtml: () => void = () => {};
+  export let onExport: () => void = () => {};
   export let onFind: () => void = () => {};
   export let onSettings: () => void = () => {};
   export let onToggleSidebar: () => void = () => {};
@@ -47,9 +47,20 @@
     <button type="button" title="打开 Ctrl+O" on:click={onOpen}><FolderOpen size={17} /></button>
     <button type="button" title="保存 Ctrl+S" on:click={onSave}><Save size={17} /></button>
     <button type="button" title="另存为 Ctrl+Shift+S" on:click={onSaveAs}><SaveAll size={17} /></button>
-    <button type="button" title="导出 HTML" on:click={onExportHtml}><FileDown size={17} /></button>
+    <button type="button" title="导出为…" on:click={onExport}><FileDown size={17} /></button>
     <span class="divider"></span>
-    <button type="button" class:active={sidebarVisible} title="侧边栏" on:click={onToggleSidebar}><PanelLeft size={17} /></button>
+    <button
+      type="button"
+      class="sidebar-toggle"
+      class:active={sidebarVisible}
+      class:restore={!sidebarVisible}
+      title={sidebarVisible ? '收起侧栏' : '展开侧栏'}
+      aria-label={sidebarVisible ? '收起侧栏' : '展开侧栏'}
+      on:click={onToggleSidebar}
+    >
+      <PanelLeft size={17} />
+      {#if !sidebarVisible}<span>展开侧栏</span>{/if}
+    </button>
     <button type="button" title="查找 Ctrl+F" on:click={onFind}><Search size={17} /></button>
     <button type="button" title="命令面板 Ctrl+P" on:click={onCommandPalette}><Command size={17} /></button>
     <button type="button" title="设置 Ctrl+," on:click={onSettings}><Settings size={17} /></button>

@@ -1,5 +1,5 @@
 use std::{
-    env, fs,
+    env,
     path::{Path, PathBuf},
 };
 
@@ -8,8 +8,8 @@ use crate::{
         app_error::AppError,
         document::{DocumentDto, DocumentOperationDto},
     },
-    services::{file_service, markdown_service, recent_files_service, settings_service},
-    utils::{atomic_write::atomic_write, path_utils::canonicalize_path},
+    services::{file_service, recent_files_service, settings_service},
+    utils::path_utils::canonicalize_path,
 };
 
 #[tauri::command]
@@ -30,33 +30,6 @@ pub fn save_markdown_file(path: String, content: String) -> Result<DocumentOpera
         document,
         update_recent(&recent_path),
     ))
-}
-
-#[tauri::command]
-pub fn export_html_file(path: String, title: String, content: String) -> Result<(), AppError> {
-    let html = markdown_service::render_standalone_html(&title, &content)?;
-    let path_buf = Path::new(&path);
-    if !path_buf.is_absolute()
-        || !path_buf
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("html"))
-    {
-        return Err(AppError::new(
-            "INVALID_EXPORT_TARGET",
-            "HTML 导出目标必须是绝对 .html 文件路径",
-        ));
-    }
-    if path_buf.exists() && !path_buf.is_file() {
-        return Err(AppError::invalid_file_target(&path));
-    }
-    if let Some(parent) = path_buf
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent).map_err(|err| AppError::file_write_failed(&path, err))?;
-    }
-    atomic_write(path_buf, html.as_bytes()).map_err(|err| AppError::file_write_failed(&path, err))
 }
 
 fn update_recent(path: &str) -> Result<(), AppError> {
@@ -153,8 +126,7 @@ mod tests {
     use std::fs;
 
     use super::{
-        canonical_startup_file, complete_document_operation, export_html_file, file_manager_target,
-        FileManagerTarget,
+        canonical_startup_file, complete_document_operation, file_manager_target, FileManagerTarget,
     };
     use crate::models::{app_error::AppError, document::DocumentDto};
 
@@ -184,39 +156,6 @@ mod tests {
             serialized["auxiliaryError"]["code"],
             "RECENT_FILES_WRITE_FAILED"
         );
-    }
-
-    #[test]
-    fn rejects_non_absolute_or_non_html_export_targets() {
-        assert_eq!(
-            export_html_file(
-                "relative.html".to_string(),
-                "Title".to_string(),
-                "Body".to_string()
-            )
-            .unwrap_err()
-            .code,
-            "INVALID_EXPORT_TARGET"
-        );
-        let target = std::env::temp_dir().join(format!(
-            "marklite-export-{}-{}.txt",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        assert_eq!(
-            export_html_file(
-                target.to_string_lossy().to_string(),
-                "Title".to_string(),
-                "Body".to_string()
-            )
-            .unwrap_err()
-            .code,
-            "INVALID_EXPORT_TARGET"
-        );
-        assert!(!target.exists());
     }
 
     #[test]

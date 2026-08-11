@@ -41,7 +41,7 @@ button {
     'toolbar'
     'workspace'
     'statusbar';
-  grid-template-rows: 56px 38px auto minmax(0, 1fr) auto;
+  grid-template-rows: 56px 44px auto minmax(0, 1fr) auto;
   height: 100%;
   background: var(--bg-primary);
 }
@@ -140,6 +140,21 @@ button {
   color: var(--accent-color);
 }
 
+.top-actions .sidebar-toggle.restore {
+  display: flex;
+  width: auto;
+  min-width: 34px;
+  gap: 6px;
+  padding: 0 10px;
+  border-color: color-mix(in srgb, var(--accent-color) 42%, transparent);
+  color: var(--accent-color);
+}
+
+.sidebar-toggle.restore span {
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
 .divider {
   width: 1px;
   height: 22px;
@@ -159,10 +174,34 @@ button {
   display: flex;
   align-items: end;
   min-width: 0;
+  height: 44px;
+  min-height: 44px;
+  box-sizing: border-box;
   overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-muted) 70%, transparent)
+    color-mix(in srgb, var(--border-color) 45%, transparent);
   padding: 5px 10px 0;
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-secondary);
+}
+
+.tabbar::-webkit-scrollbar {
+  height: 6px;
+}
+
+.tabbar::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--border-color) 45%, transparent);
+}
+
+.tabbar::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 70%, transparent);
+}
+
+.tabbar::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-secondary) 82%, transparent);
 }
 
 .document-tab {
@@ -328,7 +367,7 @@ button {
 .workspace {
   grid-area: workspace;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width, 280px) 8px minmax(0, 1fr);
   min-height: 0;
 }
 
@@ -341,13 +380,16 @@ button {
   grid-template-rows: 42px 1fr;
   min-width: 0;
   min-height: 0;
-  border-right: 1px solid var(--border-color);
   background: var(--panel-bg);
 }
 
 .sidebar-tabs {
   padding: 5px 8px;
   border-bottom: 1px solid var(--border-color);
+}
+
+.sidebar-tabs .sidebar-collapse-button {
+  margin-left: auto;
 }
 
 .sidebar-section {

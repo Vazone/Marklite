@@ -19,6 +19,13 @@ use crate::{
 const MARKLITE_TARGET_PREFIX: &str = "marklite:";
 const MAX_IMAGE_SIZE: u64 = 10 * 1024 * 1024;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportImage {
+    pub bytes: Vec<u8>,
+    pub mime: &'static str,
+    pub path: String,
+}
+
 pub fn resolve_markdown_target(
     document_path: Option<&str>,
     target: &str,
@@ -126,6 +133,31 @@ fn load_local_image_with_permission(
     let mime = image_mime(&path, &bytes)?;
     Ok(LocalImageDto {
         data_url: format!("data:{mime};base64,{}", STANDARD.encode(bytes)),
+        path: path.to_string_lossy().to_string(),
+    })
+}
+
+pub fn load_local_image_for_export(
+    document_path: Option<&str>,
+    target: &str,
+) -> Result<ExportImage, AppError> {
+    let target = unwrap_marklite_target(target)?;
+    validate_raw_target(&target)?;
+    let path = resolve_local_path(document_path, &target, false)?;
+    let metadata = fs::metadata(&path)
+        .map_err(|error| AppError::file_read_failed(&path.to_string_lossy(), error))?;
+    if metadata.len() > MAX_IMAGE_SIZE {
+        return Err(AppError::file_too_large(
+            &path.to_string_lossy(),
+            "导出图片",
+        ));
+    }
+    let bytes = fs::read(&path)
+        .map_err(|error| AppError::file_read_failed(&path.to_string_lossy(), error))?;
+    let mime = image_mime(&path, &bytes)?;
+    Ok(ExportImage {
+        bytes,
+        mime,
         path: path.to_string_lossy().to_string(),
     })
 }

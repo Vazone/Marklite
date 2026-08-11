@@ -1,6 +1,8 @@
+pub mod export_service;
 pub mod file_service;
 pub mod markdown_service;
 pub mod navigation_service;
+pub mod pdf_export_service;
 pub mod recent_files_service;
 pub mod session_service;
 pub mod settings_service;

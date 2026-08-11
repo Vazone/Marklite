@@ -7,12 +7,14 @@
   import Sidebar from '../components/layout/Sidebar.svelte';
   import DocumentTabBar from '../components/layout/DocumentTabBar.svelte';
   import SplitPaneSeparator from '../components/layout/SplitPaneSeparator.svelte';
+  import SidebarResizeSeparator from '../components/layout/SidebarResizeSeparator.svelte';
   import StatusBar from '../components/layout/StatusBar.svelte';
   import TitleBar from '../components/layout/TitleBar.svelte';
   import CommandPalette from '../components/layout/CommandPalette.svelte';
   import SettingsDialog from '../components/dialogs/SettingsDialog.svelte';
   import AboutDialog from '../components/dialogs/AboutDialog.svelte';
   import ExitConfirmationDialog from '../components/dialogs/ExitConfirmationDialog.svelte';
+  import ExportDialog from '../components/dialogs/ExportDialog.svelte';
   import {
     activeTab,
     documentStore,
@@ -28,12 +30,14 @@
     api,
     confirmAction,
     isTauriRuntime,
-    pickHtmlSavePath,
+    pickExportSavePath,
     pickMarkdownFile,
     pickMarkdownSavePath,
     pickStartupDiagnosticsSavePath,
     toAppError,
     type AppSettings,
+    type ExportFormat,
+    type ExportOptions,
     type RecentFileDto,
     type SessionStateDto
   } from '../lib/tauriApi';
@@ -48,6 +52,10 @@
     type ExitPromptState
   } from '../lib/exitProtection';
   import { startupElapsedMs, type FrontendStartupStage } from '../lib/startupLifecycle';
+  import {
+    exportSuccessMessage,
+    runExportJob
+  } from '../lib/documentExport';
 
   let editorRef: any;
   let previewRef: any;
@@ -68,6 +76,8 @@
   let unlistenCloseRequested: (() => void) | undefined;
   let allowBrowserUnload = false;
   let exitPrompt: ExitPromptState | null = null;
+  let exportDialogOpen = false;
+  let exportBusy = false;
   const initializationStartedAt = performance.now();
   const exitProtection = createExitProtectionController({
     getDirtyDocuments: getDirtyExitDocuments,
@@ -82,7 +92,7 @@
   });
 
   $: currentTitle = $activeTab?.title ?? 'Untitled.md';
-  $: effectiveSidebarVisible = $uiStore.sidebarVisible && $settingsStore.showSidebar;
+  $: effectiveSidebarVisible = $uiStore.sidebarVisible;
   $: commandItems = buildCommands();
 
   $: if ($settingsStore) {
@@ -589,25 +599,41 @@
     }, 500);
   }
 
-  async function exportHtml() {
+  function openExportDialog(): void {
+    if (!exportBusy && getActiveTab()) exportDialogOpen = true;
+  }
+
+  function closeExportDialog(): void {
+    if (!exportBusy) exportDialogOpen = false;
+  }
+
+  async function exportDocument(format: ExportFormat, options: ExportOptions) {
     let tab = getActiveTab();
     if (!tab) return;
-    if (tab.loadState !== 'loaded') {
-      const loadedTab = await loadTabContent(tab.id);
-      if (!loadedTab || loadedTab.loadState !== 'loaded') return;
-      tab = loadedTab;
-    }
-
+    exportBusy = true;
     try {
-      const fallbackName = tab.path
-        ? tab.path.replace(/\.(md|markdown|txt)$/i, '.html')
-        : `${tab.title.replace(/\.(md|markdown|txt)$/i, '')}.html`;
-      const path = await pickHtmlSavePath(fallbackName);
-      if (!path) return;
-      await api.exportHtmlFile(path, tab.title, tab.content);
-      uiActions.toast('HTML 已导出');
+      if (tab.loadState !== 'loaded') {
+        const loadedTab = await loadTabContent(tab.id);
+        if (!loadedTab || loadedTab.loadState !== 'loaded') return;
+        tab = loadedTab;
+      }
+      const result = await runExportJob(
+        tab,
+        format,
+        options,
+        (defaultPath) => pickExportSavePath(format, defaultPath),
+        api.exportDocument
+      );
+      if (!result) {
+        exportDialogOpen = false;
+        return;
+      }
+      exportDialogOpen = false;
+      uiActions.toast(exportSuccessMessage(format, result.warnings.length));
     } catch (error) {
       uiActions.toast(toAppError(error).message, 'error');
+    } finally {
+      exportBusy = false;
     }
   }
 
@@ -798,7 +824,7 @@
         shortcut: 'Ctrl+Shift+S',
         action: () => void saveActiveAs()
       },
-      { id: 'export-html', title: '导出 HTML', category: '工具', action: () => void exportHtml() },
+      { id: 'export', title: '导出为…', category: '文件', action: openExportDialog },
       { id: 'layout-edit', title: '编辑模式', category: '视图', action: () => setLayoutMode('edit') },
       { id: 'layout-split', title: '分栏模式', category: '视图', action: () => setLayoutMode('split') },
       { id: 'layout-preview', title: '预览模式', category: '视图', shortcut: 'Ctrl+E', action: () => setLayoutMode('preview') },
@@ -825,7 +851,7 @@
     onOpen={() => void openFile()}
     onSave={() => void saveActive()}
     onSaveAs={() => void saveActiveAs()}
-    onExportHtml={() => void exportHtml()}
+    onExport={openExportDialog}
     onFind={() => editorRef?.openFind()}
     onSettings={uiActions.openSettings}
     onToggleSidebar={uiActions.toggleSidebar}
@@ -853,7 +879,11 @@
     </div>
   {/if}
 
-  <div class="workspace" class:no-sidebar={!effectiveSidebarVisible}>
+  <div
+    class="workspace"
+    class:no-sidebar={!effectiveSidebarVisible}
+    style={`--sidebar-width: ${$uiStore.sidebarWidth.toFixed(2)}px;`}
+  >
     {#if effectiveSidebarVisible}
       <Sidebar
         activeSidebarTab={$uiStore.sidebarTab}
@@ -864,6 +894,13 @@
         onRemoveRecent={(path) => void removeRecent(path)}
         onRevealRecent={(path) => void revealRecent(path)}
         onJumpToLine={jumpToLine}
+        onCollapse={uiActions.collapseSidebar}
+      />
+      <SidebarResizeSeparator
+        width={$uiStore.sidebarWidth}
+        onWidthChange={uiActions.setSidebarWidth}
+        onCommit={uiActions.commitSidebarWidth}
+        onCollapse={uiActions.collapseSidebar}
       />
     {/if}
 
@@ -942,6 +979,13 @@
 />
 
 <CommandPalette open={$uiStore.commandPaletteOpen} commands={commandItems} onClose={uiActions.closeCommandPalette} />
+<ExportDialog
+  open={exportDialogOpen}
+  busy={exportBusy}
+  documentTitle={$activeTab?.title ?? ''}
+  onExport={(format, options) => void exportDocument(format, options)}
+  onClose={closeExportDialog}
+/>
 <AboutDialog
   open={$uiStore.aboutOpen}
   onClose={uiActions.closeAbout}
