@@ -12,6 +12,7 @@ MarkLite_Rust_Windows_Markdown_Editor_开发大纲.md
 coverage/
 .vite/
 tmp/
+/error/
 *.tsbuildinfo
 Thumbs.db
 Desktop.ini
