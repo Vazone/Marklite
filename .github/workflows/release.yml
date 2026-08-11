@@ -35,6 +35,8 @@ jobs:
         run: npm ci
 
       - name: Verify synchronized versions
+        env:
+          RELEASE_TAG: ''
         run: npm run version:check
 
       - name: Verify release tag
