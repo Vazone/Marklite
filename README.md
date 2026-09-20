@@ -19,9 +19,9 @@
 </div>
 
 <p align="center">
-  <img src="assets/marklite-showcase.gif" alt="MarkLite split editing, heading mind map, offline Markdown guide, and export workflow" width="100%" />
+  <img src="assets/marklite-showcase.gif" alt="MarkLite rendering formulas, scrolling in split view and selecting chapter PNG export in mixed-500-kib.md" width="100%" />
 </p>
-<p align="center"><sub>Write and preview · Explore a heading mind map · Learn Markdown offline · Export from one place</sub></p>
+<p align="center"><sub>mixed-500-kib.md (500 KiB): math preview, split-view scrolling and chapter PNG export</sub></p>
 
 ## Why MarkLite?
 

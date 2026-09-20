@@ -87,8 +87,8 @@ function officialCases() {
 }
 
 function renderWithProduction(cases) {
-  const source = path.join(root, 'Review/probes/markdown-syntax.rs').replaceAll('\\', '/');
-  const manifest = fs.readFileSync(path.join(root, 'Review/probes/markdown-syntax.Cargo.toml'), 'utf8')
+  const source = path.join(root, 'scripts/fixtures/markdown/markdown-syntax.rs').replaceAll('\\', '/');
+  const manifest = fs.readFileSync(path.join(root, 'scripts/fixtures/markdown/markdown-syntax.Cargo.toml'), 'utf8')
     .replaceAll('__PROBE_SOURCE__', source);
   const work = fs.mkdtempSync(path.join(cache, 'probe-'));
   const manifestPath = path.join(work, 'Cargo.toml');
@@ -102,7 +102,7 @@ function renderWithProduction(cases) {
     '--target-dir', path.join(root, 'src-tauri/target'), '--', casesPath, renderedPath
   ], {
     cwd: root,
-    env: { ...process.env, MARKLITE_REVIEW_ROOT: root.replaceAll('\\', '/') },
+    env: { ...process.env, MARKLITE_TEST_ROOT: root.replaceAll('\\', '/') },
     stdio: 'inherit'
   });
   if (run.error) throw run.error;

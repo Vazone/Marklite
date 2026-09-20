@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const defaultOutput = resolve(repositoryRoot, 'tmp', 'performance-corpus');
-const manifestPath = resolve(repositoryRoot, 'benchmarks', 'performance', 'corpus-manifest.json');
+const manifestPath = resolve(repositoryRoot, 'scripts', 'fixtures', 'performance-corpus-manifest.json');
 
 function parseArguments(argv) {
   const outputIndex = argv.indexOf('--output');
@@ -118,7 +118,7 @@ async function main() {
   } else {
     const expected = JSON.parse(await readFile(manifestPath, 'utf8'));
     if (JSON.stringify(expected) !== JSON.stringify(manifest)) {
-      throw new Error('Generated corpus does not match benchmarks/performance/corpus-manifest.json');
+      throw new Error('Generated corpus does not match scripts/fixtures/performance-corpus-manifest.json');
     }
   }
 

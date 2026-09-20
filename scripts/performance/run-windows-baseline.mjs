@@ -12,7 +12,7 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const corpusDirectory = resolve(repositoryRoot, 'tmp', 'performance-corpus');
-const manifestPath = resolve(repositoryRoot, 'benchmarks', 'performance', 'corpus-manifest.json');
+const manifestPath = resolve(repositoryRoot, 'scripts', 'fixtures', 'performance-corpus-manifest.json');
 const executablePath = resolve(repositoryRoot, 'src-tauri', 'target', 'release', 'marklite.exe');
 const defaultOutput = resolve(repositoryRoot, 'benchmarks', 'performance', 'results', 'windows-reference.json');
 const defaultSearchOutput = resolve(repositoryRoot, 'benchmarks', 'performance', 'results', 'dense-search-0052.json');
