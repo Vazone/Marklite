@@ -3,37 +3,18 @@ param(
   [switch]$SkipTauriBuild,
   [ValidateSet("x64")]
   [string]$Architecture = "x64",
-  [string]$RootPath
+  [string]$RootPath,
+  [string]$BuildScriptPath,
+  [string]$EvidenceScriptPath,
+  [string]$WindowsPowerShellPath
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+Import-Module (Join-Path $PSScriptRoot "lib\WindowsPackaging.psm1") -Force
+
 if ([string]::IsNullOrWhiteSpace($RootPath)) {
   $RootPath = Join-Path $PSScriptRoot ".."
-}
-
-function Invoke-CheckedNative {
-  param([string]$FilePath, [string[]]$Arguments, [string]$Description)
-
-  & $FilePath @Arguments
-  $exitCode = $LASTEXITCODE
-  if ($null -eq $exitCode) {
-    $exitCode = 0
-  }
-  if ($exitCode -ne 0) {
-    throw "$Description failed with exit code $exitCode."
-  }
-}
-
-function Assert-WorkspacePath {
-  param([string]$Path, [string]$WorkspaceRoot)
-
-  $fullPath = [System.IO.Path]::GetFullPath($Path)
-  $rootPrefix = $WorkspaceRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
-  if (-not $fullPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "Refusing to modify a packaging path outside the workspace: $fullPath"
-  }
-  return $fullPath
 }
 
 $root = (Resolve-Path -LiteralPath $RootPath).Path
@@ -41,9 +22,19 @@ $tauriConfig = Get-Content -Raw -LiteralPath (Join-Path $root "src-tauri\tauri.c
 $version = [string]$tauriConfig.version
 $artifact = Assert-WorkspacePath -Path (Join-Path $root "src-tauri\target\release\bundle\nsis\MarkLite_$($version)_$($Architecture)-setup.exe") -WorkspaceRoot $root
 $outputs = @($artifact, "$artifact.sha256", "$artifact.release.json")
-$windowsPowerShell = Join-Path $PSHOME "powershell.exe"
-if (-not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf)) {
-  throw "Windows PowerShell executable was not found: $windowsPowerShell"
+if ([string]::IsNullOrWhiteSpace($BuildScriptPath)) {
+  $BuildScriptPath = Join-Path $PSScriptRoot "build-windows-installer.ps1"
+}
+if ([string]::IsNullOrWhiteSpace($EvidenceScriptPath)) {
+  $EvidenceScriptPath = Join-Path $PSScriptRoot "write-windows-release-evidence.ps1"
+}
+foreach ($scriptPath in @($BuildScriptPath, $EvidenceScriptPath)) {
+  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
+    throw "Packaging stage script was not found: $scriptPath"
+  }
+}
+if ([string]::IsNullOrWhiteSpace($WindowsPowerShellPath)) {
+  $WindowsPowerShellPath = Resolve-WindowsPowerShellPath
 }
 
 $succeeded = $false
@@ -51,7 +42,7 @@ try {
   $buildArguments = @(
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
-    "-File", (Join-Path $PSScriptRoot "build-windows-installer.ps1"),
+    "-File", $BuildScriptPath,
     "-Architecture", $Architecture,
     "-RootPath", $root,
     "-SkipEvidence"
@@ -59,13 +50,13 @@ try {
   if ($SkipTauriBuild) {
     $buildArguments += "-SkipTauriBuild"
   }
-  Invoke-CheckedNative -FilePath $windowsPowerShell -Arguments $buildArguments -Description "Windows installer build"
+  Invoke-CheckedNative -FilePath $WindowsPowerShellPath -Arguments $buildArguments -Description "Windows installer build"
 
   $buildMode = $(if ($SkipTauriBuild) { "skip-tauri-build" } else { "full" })
-  Invoke-CheckedNative -FilePath $windowsPowerShell -Arguments @(
+  Invoke-CheckedNative -FilePath $WindowsPowerShellPath -Arguments @(
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
-    "-File", (Join-Path $PSScriptRoot "write-windows-release-evidence.ps1"),
+    "-File", $EvidenceScriptPath,
     "-ArtifactPath", $artifact,
     "-Architecture", $Architecture,
     "-BuildMode", $buildMode,

@@ -13,10 +13,7 @@ use crate::{
         app_error::AppError,
         settings::{AppSettings, SETTINGS_SCHEMA_VERSION},
     },
-    utils::{
-        atomic_write::{atomic_write, recover_atomic_write},
-        path_utils::settings_path,
-    },
+    utils::{atomic_write::atomic_write, bounded_read::OpenedFile, path_utils::settings_path},
 };
 
 #[derive(Serialize)]
@@ -32,15 +29,28 @@ enum SettingsParseError {
 }
 
 static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static SETTINGS_CACHE: OnceLock<Mutex<Option<AppSettings>>> = OnceLock::new();
+const MAX_SETTINGS_FILE_BYTES: u64 = 256 * 1024;
 
 pub fn load_settings() -> Result<AppSettings, AppError> {
     let _guard = settings_lock();
-    load_settings_from(&settings_path()?)
+    if let Some(settings) = settings_cache().clone() {
+        return Ok(settings);
+    }
+    let settings = load_settings_from(&settings_path()?)?;
+    *settings_cache() = Some(settings.clone());
+    Ok(settings)
 }
 
 pub fn save_settings(settings: &AppSettings) -> Result<AppSettings, AppError> {
     let _guard = settings_lock();
-    save_settings_to(&settings_path()?, settings)
+    save_settings_at(&settings_path()?, settings)
+}
+
+fn save_settings_at(path: &Path, settings: &AppSettings) -> Result<AppSettings, AppError> {
+    let saved = save_settings_to(path, settings)?;
+    *settings_cache() = Some(saved.clone());
+    Ok(saved)
 }
 
 pub fn reset_settings() -> Result<AppSettings, AppError> {
@@ -48,14 +58,13 @@ pub fn reset_settings() -> Result<AppSettings, AppError> {
 }
 
 fn load_settings_from(path: &Path) -> Result<AppSettings, AppError> {
-    recover_atomic_write(path).map_err(AppError::settings_read_failed)?;
     if !path.exists() {
         let defaults = AppSettings::default();
         save_settings_to(path, &defaults)?;
         return Ok(defaults);
     }
 
-    let raw = fs::read_to_string(path).map_err(AppError::settings_read_failed)?;
+    let raw = read_settings_source(path)?;
     match parse_settings(&raw) {
         Ok((settings, needs_rewrite)) => {
             if needs_rewrite {
@@ -76,14 +85,53 @@ fn load_settings_from(path: &Path) -> Result<AppSettings, AppError> {
 
 fn save_settings_to(path: &Path, settings: &AppSettings) -> Result<AppSettings, AppError> {
     settings.validate().map_err(AppError::invalid_settings)?;
+    ensure_supported_settings_version(path)?;
     let document = SettingsDocument {
         version: SETTINGS_SCHEMA_VERSION,
         settings,
     };
     let content =
         serde_json::to_string_pretty(&document).map_err(AppError::settings_write_failed)?;
+    if content.len() as u64 > MAX_SETTINGS_FILE_BYTES {
+        return Err(AppError::settings_write_failed(std::io::Error::new(
+            std::io::ErrorKind::FileTooLarge,
+            "设置文件超过允许的字节上限",
+        )));
+    }
     atomic_write(path, content.as_bytes()).map_err(AppError::settings_write_failed)?;
     Ok(settings.clone())
+}
+
+fn ensure_supported_settings_version(path: &Path) -> Result<(), AppError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let raw = read_settings_source(path)?;
+    // Malformed JSON retains the existing save behavior; only a recognized version blocks writes.
+    if let Ok(document) = serde_json::from_str::<Value>(&raw) {
+        if let Some(raw_version) = document.get("version") {
+            let version = raw_version
+                .as_u64()
+                .ok_or_else(|| AppError::settings_read_failed("version 必须是非负整数"))?;
+            if version != u64::from(SETTINGS_SCHEMA_VERSION) {
+                return Err(AppError::settings_version_unsupported(version));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_settings_source(path: &Path) -> Result<String, AppError> {
+    let opened = OpenedFile::open(path).map_err(AppError::settings_read_failed)?;
+    if !opened.metadata().is_file() {
+        return Err(AppError::settings_read_failed("设置路径不是普通文件"));
+    }
+    if opened.metadata().len() > MAX_SETTINGS_FILE_BYTES {
+        return Err(AppError::settings_read_failed("设置文件超过允许的字节上限"));
+    }
+    opened
+        .read_to_string_bounded(MAX_SETTINGS_FILE_BYTES)
+        .map_err(AppError::settings_read_failed)
 }
 
 fn parse_settings(raw: &str) -> Result<(AppSettings, bool), SettingsParseError> {
@@ -145,46 +193,36 @@ fn settings_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+fn settings_cache() -> std::sync::MutexGuard<'static, Option<AppSettings>> {
+    SETTINGS_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::fs;
 
     use serde_json::{json, Value};
 
-    use super::{load_settings_from, save_settings_to};
-    use crate::models::settings::{AppSettings, SETTINGS_SCHEMA_VERSION};
-
-    fn test_path(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "marklite-settings-{}-{}-{name}.json",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ))
-    }
-
-    fn remove_backups(path: &PathBuf) {
-        let prefix = path.file_stem().unwrap().to_string_lossy();
-        for entry in fs::read_dir(path.parent().unwrap()).unwrap().flatten() {
-            if entry.path() != *path
-                && entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(prefix.as_ref())
-            {
-                fs::remove_file(entry.path()).unwrap();
-            }
-        }
-    }
+    use super::{
+        load_settings_from, save_settings_at, save_settings_to, settings_cache, settings_lock,
+        MAX_SETTINGS_FILE_BYTES,
+    };
+    use crate::{
+        models::settings::{AppSettings, SETTINGS_SCHEMA_VERSION},
+        utils::test_support::TestDirectory,
+    };
 
     #[test]
     fn migrates_legacy_objects_and_fills_missing_fields() {
-        let path = test_path("legacy");
+        let directory = TestDirectory::new("settings-legacy");
+        let path = directory.path().join("settings.json");
         let mut legacy = serde_json::to_value(AppSettings::default()).unwrap();
         let object = legacy.as_object_mut().unwrap();
         object.remove("showStatusBar");
+        object.remove("language");
         object.insert("allowLocalImages".to_string(), Value::Bool(true));
         fs::write(&path, serde_json::to_string_pretty(&legacy).unwrap()).unwrap();
 
@@ -192,15 +230,44 @@ mod tests {
         let migrated: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
 
         assert!(loaded.show_status_bar);
+        assert_eq!(
+            loaded.language,
+            crate::models::settings::AppLanguage::English
+        );
         assert_eq!(migrated["version"], SETTINGS_SCHEMA_VERSION);
+        assert_eq!(migrated["settings"]["language"], "en");
         assert_eq!(migrated["settings"]["allowLocalImages"], true);
-        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn removes_retired_zoom_field_without_losing_other_settings() {
+        for versioned in [false, true] {
+            let directory = TestDirectory::new("settings-retired-zoom");
+            let path = directory.path().join("settings.json");
+            let mut payload = serde_json::to_value(AppSettings::default()).unwrap();
+            payload["interfaceScale"] = json!(1.25);
+            payload["editorFontSize"] = json!(20);
+            let document = if versioned {
+                json!({ "version": SETTINGS_SCHEMA_VERSION, "settings": payload })
+            } else {
+                payload
+            };
+            fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+
+            assert_eq!(load_settings_from(&path).unwrap().editor_font_size, 20);
+            let rewritten: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert_eq!(rewritten["settings"]["editorFontSize"], 20);
+            assert!(rewritten["settings"].get("interfaceScale").is_none());
+            assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+        }
     }
 
     #[test]
     fn round_trips_the_versioned_document() {
-        let path = test_path("round-trip");
+        let directory = TestDirectory::new("settings-round-trip");
+        let path = directory.path().join("settings.json");
         let settings = AppSettings {
+            language: crate::models::settings::AppLanguage::SimplifiedChinese,
             theme: crate::models::settings::ThemeMode::Dark,
             ..AppSettings::default()
         };
@@ -208,12 +275,12 @@ mod tests {
         save_settings_to(&path, &settings).unwrap();
 
         assert_eq!(load_settings_from(&path).unwrap(), settings);
-        fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn rejects_invalid_updates_without_writing() {
-        let path = test_path("invalid-update");
+        let directory = TestDirectory::new("settings-invalid-update");
+        let path = directory.path().join("settings.json");
         let settings = AppSettings {
             recent_files_limit: 0,
             ..AppSettings::default()
@@ -227,7 +294,8 @@ mod tests {
 
     #[test]
     fn backs_up_invalid_known_values_and_restores_defaults() {
-        let path = test_path("invalid-file");
+        let directory = TestDirectory::new("settings-invalid-file");
+        let path = directory.path().join("settings.json");
         let mut settings = serde_json::to_value(AppSettings::default())
             .unwrap()
             .as_object()
@@ -248,13 +316,19 @@ mod tests {
 
         assert_eq!(error.code, "SETTINGS_READ_FAILED");
         assert_eq!(load_settings_from(&path).unwrap(), AppSettings::default());
-        remove_backups(&path);
-        fs::remove_file(path).unwrap();
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
+        let changed = AppSettings {
+            editor_font_size: 20,
+            ..AppSettings::default()
+        };
+        assert_eq!(save_settings_to(&path, &changed).unwrap(), changed);
+        assert_eq!(load_settings_from(&path).unwrap(), changed);
     }
 
     #[test]
     fn preserves_future_version_files() {
-        let path = test_path("future-version");
+        let directory = TestDirectory::new("settings-future-version");
+        let path = directory.path().join("settings.json");
         let raw = r#"{"version":999,"settings":{}}"#;
         fs::write(&path, raw).unwrap();
 
@@ -262,6 +336,86 @@ mod tests {
 
         assert_eq!(error.code, "SETTINGS_VERSION_UNSUPPORTED");
         assert_eq!(fs::read_to_string(&path).unwrap(), raw);
-        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn save_and_reset_cannot_replace_a_future_version() {
+        let directory = TestDirectory::new("settings-future-write");
+        let path = directory.path().join("settings.json");
+        let raw = br#"{"version":999,"settings":{"newFeature":true}}"#;
+        fs::write(&path, raw).unwrap();
+
+        assert_eq!(
+            load_settings_from(&path).unwrap_err().code,
+            "SETTINGS_VERSION_UNSUPPORTED"
+        );
+        for replacement in [
+            AppSettings {
+                editor_font_size: 20,
+                ..AppSettings::default()
+            },
+            AppSettings::default(),
+        ] {
+            assert_eq!(
+                save_settings_to(&path, &replacement).unwrap_err().code,
+                "SETTINGS_VERSION_UNSUPPORTED"
+            );
+            assert_eq!(fs::read(&path).unwrap(), raw);
+        }
+    }
+
+    #[test]
+    fn save_rechecks_the_file_after_a_successful_load() {
+        let directory = TestDirectory::new("settings-replaced-after-read");
+        let path = directory.path().join("settings.json");
+        save_settings_to(&path, &AppSettings::default()).unwrap();
+        load_settings_from(&path).unwrap();
+        let future = br#"{"version":999,"settings":{"newFeature":true}}"#;
+        fs::write(&path, future).unwrap();
+
+        assert_eq!(
+            save_settings_to(&path, &AppSettings::default())
+                .unwrap_err()
+                .code,
+            "SETTINGS_VERSION_UNSUPPORTED"
+        );
+        assert_eq!(fs::read(&path).unwrap(), future);
+    }
+
+    #[test]
+    fn rejected_future_write_leaves_cached_settings_unchanged() {
+        let directory = TestDirectory::new("settings-future-cache");
+        let path = directory.path().join("settings.json");
+        fs::write(&path, br#"{"version":999,"settings":{}}"#).unwrap();
+        let _guard = settings_lock();
+        let prior = settings_cache().clone();
+        let cached = AppSettings {
+            editor_font_size: 20,
+            ..AppSettings::default()
+        };
+        *settings_cache() = Some(cached.clone());
+
+        assert_eq!(
+            save_settings_at(&path, &AppSettings::default())
+                .unwrap_err()
+                .code,
+            "SETTINGS_VERSION_UNSUPPORTED"
+        );
+        assert_eq!(settings_cache().as_ref(), Some(&cached));
+        *settings_cache() = prior;
+    }
+
+    #[test]
+    fn rejects_oversized_settings_before_deserializing() {
+        let directory = TestDirectory::new("settings-oversized");
+        let path = directory.path().join("settings.json");
+        let mut raw = vec![b' '; MAX_SETTINGS_FILE_BYTES as usize + 1];
+        raw.extend(serde_json::to_vec(&AppSettings::default()).unwrap());
+        fs::write(&path, &raw).unwrap();
+
+        let result = load_settings_from(&path);
+
+        assert_eq!(result.unwrap_err().code, "SETTINGS_READ_FAILED");
+        assert_eq!(fs::read(path).unwrap(), raw);
     }
 }

@@ -31,6 +31,7 @@ export type UiState = {
   settingsOpen: boolean;
   commandPaletteOpen: boolean;
   aboutOpen: boolean;
+  markdownGuideOpen: boolean;
   toasts: Toast[];
 };
 
@@ -49,8 +50,12 @@ const store = writable<UiState>({
   settingsOpen: false,
   commandPaletteOpen: false,
   aboutOpen: false,
+  markdownGuideOpen: false,
   toasts: []
 });
+
+const MAX_TOASTS = 8;
+const toastTimers = new Map<string, number>();
 
 export const uiStore = {
   subscribe: store.subscribe
@@ -138,31 +143,84 @@ export const uiActions = {
     store.update((state) => ({ ...state, sidebarTab }));
   },
   openSettings() {
-    store.update((state) => ({ ...state, settingsOpen: true }));
+    store.update((state) => ({
+      ...state,
+      settingsOpen: true,
+      commandPaletteOpen: false,
+      aboutOpen: false,
+      markdownGuideOpen: false
+    }));
   },
   closeSettings() {
     store.update((state) => ({ ...state, settingsOpen: false }));
   },
   openCommandPalette() {
-    store.update((state) => ({ ...state, commandPaletteOpen: true }));
+    store.update((state) => ({
+      ...state,
+      settingsOpen: false,
+      commandPaletteOpen: true,
+      aboutOpen: false,
+      markdownGuideOpen: false
+    }));
   },
   closeCommandPalette() {
     store.update((state) => ({ ...state, commandPaletteOpen: false }));
   },
   openAbout() {
-    store.update((state) => ({ ...state, aboutOpen: true }));
+    store.update((state) => ({
+      ...state,
+      settingsOpen: false,
+      commandPaletteOpen: false,
+      aboutOpen: true,
+      markdownGuideOpen: false
+    }));
   },
   closeAbout() {
     store.update((state) => ({ ...state, aboutOpen: false }));
   },
+  openMarkdownGuide() {
+    store.update((state) => ({
+      ...state,
+      settingsOpen: false,
+      commandPaletteOpen: false,
+      aboutOpen: false,
+      markdownGuideOpen: true
+    }));
+  },
+  closeMarkdownGuide() {
+    store.update((state) => ({ ...state, markdownGuideOpen: false }));
+  },
+  closeModals() {
+    store.update((state) => ({
+      ...state,
+      settingsOpen: false,
+      commandPaletteOpen: false,
+      aboutOpen: false,
+      markdownGuideOpen: false
+    }));
+  },
   toast(message: string, tone: ToastTone = 'success') {
     const toast = { id: createId(), message, tone };
-    store.update((state) => ({ ...state, toasts: [...state.toasts, toast] }));
-    window.setTimeout(() => {
+    store.update((state) => {
+      const next = [...state.toasts, toast];
+      const removed = next.slice(0, Math.max(0, next.length - MAX_TOASTS));
+      for (const item of removed) {
+        const timer = toastTimers.get(item.id);
+        if (timer !== undefined) window.clearTimeout(timer);
+        toastTimers.delete(item.id);
+      }
+      return { ...state, toasts: next.slice(-MAX_TOASTS) };
+    });
+    const timer = window.setTimeout(() => {
+      toastTimers.delete(toast.id);
       store.update((state) => ({ ...state, toasts: state.toasts.filter((item) => item.id !== toast.id) }));
     }, 3200);
+    toastTimers.set(toast.id, timer);
   },
   dismissToast(id: string) {
+    const timer = toastTimers.get(id);
+    if (timer !== undefined) window.clearTimeout(timer);
+    toastTimers.delete(id);
     store.update((state) => ({ ...state, toasts: state.toasts.filter((toast) => toast.id !== id) }));
   }
 };

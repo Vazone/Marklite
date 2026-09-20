@@ -1,31 +1,32 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Clock3, FileText, FolderOpen, Info, ListTree, PanelLeftClose, Trash2 } from 'lucide-svelte';
-  import type { EditorTab } from '../../app/stores/documentStore';
+  import type { SidebarDocumentView } from '../../app/stores/documentStore';
   import type { RecentFileDto } from '../../lib/tauriApi';
   import type { SidebarTab } from '../../app/stores/uiStore';
+  import { clampContextMenuPosition, type ContextMenuPosition } from '../../lib/contextMenuPosition';
   import { isSameFilePath } from '../../lib/filePathIdentity';
+  import { outlineItemAtLine } from '../../lib/outlineSelection';
+  import { currentLanguage, translator } from '../../lib/i18n';
 
-  type RecentContextMenu = {
-    x: number;
-    y: number;
+  type RecentContextMenu = ContextMenuPosition & {
     path: string;
   };
 
   export let activeSidebarTab: SidebarTab = 'recent';
   export let recentFiles: RecentFileDto[] = [];
-  export let tab: EditorTab | undefined;
-  export let onTabChange: (tab: SidebarTab) => void = () => {};
-  export let onOpenRecent: (path: string) => void = () => {};
-  export let onRemoveRecent: (path: string) => void = () => {};
-  export let onRevealRecent: (path: string) => void = () => {};
-  export let onJumpToLine: (line: number) => void = () => {};
-  export let onCollapse: () => void = () => {};
+  export let tab: SidebarDocumentView | undefined;
+  export let onTabChange: (tab: SidebarTab) => void;
+  export let onOpenRecent: (path: string) => void;
+  export let onRemoveRecent: (path: string) => void;
+  export let onRevealRecent: (path: string) => void;
+  export let onJumpToLine: (line: number) => void;
+  export let onCollapse: () => void;
 
   let contextMenu: RecentContextMenu | null = null;
 
   $: currentLine = tab?.scrollPosition.line ?? tab?.cursorPosition.line ?? 1;
-  $: currentOutline = tab?.outline.filter((item) => item.line <= currentLine).at(-1);
+  $: currentOutline = outlineItemAtLine(tab?.outline ?? [], currentLine);
   $: currentRecentIndex = tab?.path
     ? recentFiles.findIndex((file) => isSameFilePath(file.path, tab?.path))
     : -1;
@@ -48,11 +49,16 @@
 
   function openRecentContext(event: MouseEvent, path: string) {
     event.preventDefault();
-    const menuWidth = 220;
-    const menuHeight = 48;
+    const position = clampContextMenuPosition(
+      event.clientX,
+      event.clientY,
+      220,
+      48,
+      window.innerWidth,
+      window.innerHeight
+    );
     contextMenu = {
-      x: Math.min(event.clientX, window.innerWidth - menuWidth - 8),
-      y: Math.min(event.clientY, window.innerHeight - menuHeight - 8),
+      ...position,
       path
     };
   }
@@ -70,23 +76,23 @@
 
 <aside class="sidebar">
   <div class="sidebar-tabs">
-    <button type="button" class:active={activeSidebarTab === 'recent'} title="最近文件" on:click={() => onTabChange('recent')}>
+    <button type="button" class:active={activeSidebarTab === 'recent'} title={$translator('sidebar.recent')} on:click={() => onTabChange('recent')}>
       <Clock3 size={16} />
     </button>
-    <button type="button" class:active={activeSidebarTab === 'outline'} title="文档大纲" on:click={() => onTabChange('outline')}>
+    <button type="button" class:active={activeSidebarTab === 'outline'} title={$translator('sidebar.outline')} on:click={() => onTabChange('outline')}>
       <ListTree size={16} />
     </button>
-    <button type="button" class:active={activeSidebarTab === 'info'} title="文档信息" on:click={() => onTabChange('info')}>
+    <button type="button" class:active={activeSidebarTab === 'info'} title={$translator('sidebar.info')} on:click={() => onTabChange('info')}>
       <Info size={16} />
     </button>
-    <button type="button" class="sidebar-collapse-button" title="收起侧栏" aria-label="收起侧栏" on:click={onCollapse}>
+    <button type="button" class="sidebar-collapse-button" title={$translator('sidebar.collapse')} aria-label={$translator('sidebar.collapse')} on:click={onCollapse}>
       <PanelLeftClose size={16} />
     </button>
   </div>
 
   {#if activeSidebarTab === 'recent'}
     <section class="sidebar-section">
-      <h2>最近文件</h2>
+      <h2>{$translator('sidebar.recent')}</h2>
       {#if recentFiles.length}
         <div class="recent-list" role="list">
           {#each recentFiles as file, index}
@@ -106,22 +112,22 @@
                 <FileText class="recent-file-icon" size={15} aria-hidden="true" />
                 <span class="recent-file-text">
                   <strong>{file.title}</strong>
-                  <small>{new Date(file.lastOpenedAt).toLocaleString()}</small>
+                  <small>{new Date(file.lastOpenedAt).toLocaleString($currentLanguage)}</small>
                 </span>
               </button>
-              <button type="button" class="icon-danger" title="移除记录" on:click={() => onRemoveRecent(file.path)}>
+              <button type="button" class="icon-danger" title={$translator('sidebar.removeRecent')} on:click={() => onRemoveRecent(file.path)}>
                 <Trash2 class="recent-action-icon" size={14} aria-hidden="true" />
               </button>
             </div>
           {/each}
         </div>
       {:else}
-        <p class="muted">打开文件后会显示在这里。</p>
+        <p class="muted">{$translator('sidebar.recentEmpty')}</p>
       {/if}
     </section>
   {:else if activeSidebarTab === 'outline'}
     <section class="sidebar-section">
-      <h2>文档大纲</h2>
+      <h2>{$translator('sidebar.outline')}</h2>
       {#if tab?.outline.length}
         <div class="outline-list">
           {#each tab.outline as item}
@@ -138,23 +144,23 @@
           {/each}
         </div>
       {:else}
-        <p class="muted">当前文档没有标题。</p>
+        <p class="muted">{$translator('sidebar.outlineEmpty')}</p>
       {/if}
     </section>
   {:else}
     <section class="sidebar-section">
-      <h2>文档信息</h2>
+      <h2>{$translator('sidebar.info')}</h2>
       <dl class="info-list">
-        <div><dt>文件名</dt><dd>{tab?.title ?? 'Untitled.md'}</dd></div>
-        <div><dt>路径</dt><dd>{tab?.path ?? '未保存'}</dd></div>
-        <div><dt>当前位置</dt><dd>{currentOutline ? `${currentOutline.title}（第 ${currentLine} 行）` : `第 ${currentLine} 行`}</dd></div>
-        <div><dt>大小</dt><dd>{tab?.fileSize ? `${(tab.fileSize / 1024).toFixed(1)} KB` : '-'}</dd></div>
-        <div><dt>最后保存</dt><dd>{tab?.lastSavedAt ? new Date(tab.lastSavedAt).toLocaleString() : '-'}</dd></div>
-        <div><dt>词数</dt><dd>{tab?.stats.wordCount ?? 0}</dd></div>
-        <div><dt>字符</dt><dd>{tab?.stats.characterCount ?? 0}</dd></div>
-        <div><dt>标题</dt><dd>{tab?.stats.headingCount ?? 0}</dd></div>
-        <div><dt>链接</dt><dd>{tab?.stats.linkCount ?? 0}</dd></div>
-        <div><dt>图片</dt><dd>{tab?.stats.imageCount ?? 0}</dd></div>
+        <div><dt>{$translator('sidebar.fileName')}</dt><dd>{tab?.title ?? 'Untitled.md'}</dd></div>
+        <div><dt>{$translator('sidebar.path')}</dt><dd>{tab?.path ?? $translator('common.unsaved')}</dd></div>
+        <div><dt>{$translator('sidebar.position')}</dt><dd>{currentOutline ? $translator('sidebar.positionHeading', { title: currentOutline.title, line: currentLine }) : $translator('common.line', { line: currentLine })}</dd></div>
+        <div><dt>{$translator('sidebar.size')}</dt><dd>{tab?.fileSize != null ? `${(tab.fileSize / 1024).toFixed(1)} KB` : '-'}</dd></div>
+        <div><dt>{$translator('sidebar.lastSaved')}</dt><dd>{tab?.lastSavedAt ? new Date(tab.lastSavedAt).toLocaleString($currentLanguage) : '-'}</dd></div>
+        <div><dt>{$translator('sidebar.words')}</dt><dd>{tab?.stats.wordCount ?? 0}</dd></div>
+        <div><dt>{$translator('sidebar.characters')}</dt><dd>{tab?.stats.characterCount ?? 0}</dd></div>
+        <div><dt>{$translator('sidebar.headings')}</dt><dd>{tab?.stats.headingCount ?? 0}</dd></div>
+        <div><dt>{$translator('sidebar.links')}</dt><dd>{tab?.stats.linkCount ?? 0}</dd></div>
+        <div><dt>{$translator('sidebar.images')}</dt><dd>{tab?.stats.imageCount ?? 0}</dd></div>
       </dl>
     </section>
   {/if}
@@ -164,12 +170,15 @@
       class="sidebar-context-menu"
       style:left={`${contextMenu.x}px`}
       style:top={`${contextMenu.y}px`}
+      style:width={`${contextMenu.width}px`}
+      style:max-height={`${contextMenu.maxHeight}px`}
+      style:overflow-y="auto"
       role="menu"
       tabindex="-1"
     >
       <button type="button" role="menuitem" on:click={revealContextPath}>
         <FolderOpen size={15} />
-        <span>在文件管理器中显示</span>
+        <span>{$translator('sidebar.reveal')}</span>
       </button>
     </div>
   {/if}

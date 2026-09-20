@@ -41,6 +41,7 @@ impl FrontendStartupStage {
 pub enum FrontendStartupStatus {
     Started,
     Succeeded,
+    Degraded,
     Failed,
 }
 
@@ -49,6 +50,7 @@ impl FrontendStartupStatus {
         match self {
             Self::Started => "started",
             Self::Succeeded => "succeeded",
+            Self::Degraded => "degraded",
             Self::Failed => "failed",
         }
     }
@@ -60,10 +62,12 @@ pub enum FrontendStartupCode {
     AppRootMissing,
     ModuleLoadFailed,
     SvelteMountFailed,
+    InteractiveFrameTimeout,
     ReadySentinelMissing,
     ReadyHandshakeFailed,
     UnhandledError,
     UnhandledRejection,
+    StageDegraded,
     InitializationFailed,
     EditorMountFailed,
 }
@@ -74,10 +78,12 @@ impl FrontendStartupCode {
             Self::AppRootMissing => "appRootMissing",
             Self::ModuleLoadFailed => "moduleLoadFailed",
             Self::SvelteMountFailed => "svelteMountFailed",
+            Self::InteractiveFrameTimeout => "interactiveFrameTimeout",
             Self::ReadySentinelMissing => "readySentinelMissing",
             Self::ReadyHandshakeFailed => "readyHandshakeFailed",
             Self::UnhandledError => "unhandledError",
             Self::UnhandledRejection => "unhandledRejection",
+            Self::StageDegraded => "stageDegraded",
             Self::InitializationFailed => "initializationFailed",
             Self::EditorMountFailed => "editorMountFailed",
         }
@@ -85,7 +91,7 @@ impl FrontendStartupCode {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendStartupEventDto {
     pub stage: FrontendStartupStage,
     pub status: FrontendStartupStatus,
@@ -94,7 +100,7 @@ pub struct FrontendStartupEventDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartupDiagnosticRecord {
     pub schema_version: u8,
     pub timestamp: String,

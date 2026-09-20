@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "commonmark": "CommonMark 0.31.2 syntax without product extensions",
+    "gfm": "GFM 0.29-gfm extension syntax over the current CommonMark parser; 10 numbered differences are classified by the conformance gate",
+    "default": "GFM plus named MarkLite footnotes, definition lists, alerts, heading attributes, and bounded math"
+  },
+  "surfaceDefaults": {
+    "editor": "source",
+    "preview": "native",
+    "gui": "shared",
+    "cli": "shared",
+    "shell": "windows",
+    "html": "native",
+    "pdf": "mapped",
+    "docx": "mapped"
+  },
+  "chapterDefaultOwner": "0089",
+  "chapterOverrides": [
+    {
+      "suite": "CommonMark 0.31.2",
+      "section": "HTML blocks",
+      "owner": "0083",
+      "statuses": { "preview": "filtered", "html": "filtered", "pdf": "filtered", "docx": "degraded" }
+    },
+    {
+      "suite": "CommonMark 0.31.2",
+      "section": "Raw HTML",
+      "owner": "0083",
+      "statuses": { "preview": "filtered", "html": "filtered", "pdf": "filtered", "docx": "degraded" }
+    },
+    {
+      "suite": "CommonMark 0.31.2",
+      "section": "Images",
+      "statuses": { "preview": "conditional", "html": "conditional", "pdf": "conditional", "docx": "conditional" }
+    },
+    {
+      "suite": "GFM 0.29-gfm",
+      "section": "4.6HTML blocks",
+      "owner": "0083",
+      "statuses": { "preview": "filtered", "html": "filtered", "pdf": "filtered", "docx": "degraded" }
+    },
+    {
+      "suite": "GFM 0.29-gfm",
+      "section": "6.10Raw HTML",
+      "owner": "0083",
+      "statuses": { "preview": "filtered", "html": "filtered", "pdf": "filtered", "docx": "degraded" }
+    },
+    {
+      "suite": "GFM 0.29-gfm",
+      "section": "6.11Disallowed Raw HTML (extension)",
+      "owner": "0083",
+      "statuses": { "preview": "filtered", "html": "filtered", "pdf": "filtered", "docx": "degraded" }
+    },
+    {
+      "suite": "GFM 0.29-gfm",
+      "section": "6.7Images",
+      "statuses": { "preview": "conditional", "html": "conditional", "pdf": "conditional", "docx": "conditional" }
+    },
+    {
+      "suite": "GFM 0.29-gfm",
+      "section": "6.9Autolinks (extension)",
+      "owner": "0081/0082"
+    },
+    {
+      "suite": "GFM 0.29-gfm",
+      "section": "5.3Task list items (extension)",
+      "owner": "0085"
+    }
+  ],
+  "namedExtensions": [
+    {
+      "id": "footnotes",
+      "fixture": "Body[^n]\n\n[^n]: Footnote text",
+      "expectedConfiguredContains": "class=\"footnote-definition\"",
+      "owner": "0089",
+      "statuses": { "editor": "source", "preview": "native", "gui": "shared", "cli": "shared", "shell": "windows", "html": "native", "pdf": "mapped", "docx": "mapped" },
+      "boundary": "DOCX footnote hyperlinks degrade to visible label and destination with a warning"
+    },
+    {
+      "id": "definition-lists",
+      "fixture": "Term\n: Definition",
+      "expectedConfiguredContains": "<dd>Definition</dd>",
+      "owner": "0089",
+      "statuses": { "editor": "source", "preview": "native", "gui": "shared", "cli": "shared", "shell": "windows", "html": "native", "pdf": "mapped", "docx": "mapped" },
+      "boundary": "DOCX maps terms and every definition paragraph to separate paragraphs with definition indentation"
+    },
+    {
+      "id": "alerts",
+      "fixture": "> [!NOTE]\n> Note body",
+      "expectedConfiguredContains": "markdown-alert-note",
+      "owner": "0089/0096",
+      "statuses": { "editor": "source", "preview": "native", "gui": "shared", "cli": "shared", "shell": "windows", "html": "native", "pdf": "mapped", "docx": "mapped" },
+      "boundary": "Only five named alert kinds are recognized; DOCX emits a visible kind label followed by indented alert paragraphs"
+    },
+    {
+      "id": "heading-attributes",
+      "fixture": "# Heading {#custom-id}",
+      "expectedConfiguredContains": "id=\"custom-id\"",
+      "owner": "0082/0089",
+      "statuses": { "editor": "source", "preview": "native", "gui": "shared", "cli": "shared", "shell": "windows", "html": "native", "pdf": "mapped", "docx": "mapped" },
+      "boundary": "DOCX maps heading IDs to unique internal bookmarks"
+    },
+    {
+      "id": "bounded-math",
+      "fixture": "Inline $x^2$\n\n$$\\frac{1}{2}$$",
+      "expectedConfiguredContains": "math math-inline",
+      "expectedPreviewContains": "<math",
+      "owner": "0090",
+      "statuses": { "editor": "source", "preview": "conditional", "gui": "shared", "cli": "shared", "shell": "windows", "html": "conditional", "pdf": "conditional", "docx": "conditional" },
+      "boundary": "Named MathML/OMML intersection and matrix/align environments; per-formula/document budgets; invalid input remains visible with positioned MATH_* warning"
+    },
+    {
+      "id": "mermaid",
+      "fixture": "```mermaid\ngraph TD; A-->B\n```",
+      "expectedConfiguredContains": "language-mermaid",
+      "owner": "0091/0092/0093/0094/0095",
+      "statuses": { "editor": "source", "preview": "conditional", "gui": "shared", "cli": "shared", "shell": "windows", "html": "conditional", "pdf": "conditional", "docx": "conditional" },
+      "boundary": "Compatible optional offline Mermaid pack renders a verified SVG in preview/HTML/PDF; DOCX embeds a derived PNG. Missing pack or syntax error preserves fenced source and reports a diagnostic or export warning"
+    },
+    {
+      "id": "unicode-emoji",
+      "fixture": "中文 😀 text",
+      "expectedConfiguredContains": "😀",
+      "owner": "0086",
+      "statuses": { "editor": "source", "preview": "native", "gui": "shared", "cli": "shared", "shell": "windows", "html": "native", "pdf": "mapped", "docx": "mapped" },
+      "boundary": "Unicode characters are ordinary text; font coverage is reader dependent"
+    },
+    {
+      "id": "emoji-shortcodes",
+      "fixture": ":smile: unknown :not_a_name:",
+      "expectedConfiguredContains": ":not_a_name:",
+      "owner": "0086/0096",
+      "statuses": { "editor": "source", "preview": "source", "gui": "source", "cli": "source", "shell": "windows", "html": "source", "pdf": "source", "docx": "source" },
+      "boundary": "Not part of CommonMark/GFM; no stable local shortcode registry is promised in this batch"
+    },
+    {
+      "id": "highlight-syntax",
+      "fixture": "==marked==",
+      "expectedConfiguredContains": "==marked==",
+      "owner": "0086/0096",
+      "statuses": { "editor": "source", "preview": "source", "gui": "source", "cli": "source", "shell": "windows", "html": "source", "pdf": "source", "docx": "source" },
+      "boundary": "GFM-only CodeMirror parser leaves double-equals markers as ordinary source; guide identifies this shorthand as unsupported"
+    },
+    {
+      "id": "subscript-superscript",
+      "fixture": "H~2~O and x^2^",
+      "expectedConfiguredContains": "H~2~O and x^2^",
+      "owner": "0086/0096",
+      "statuses": { "editor": "source", "preview": "source", "gui": "source", "cli": "source", "shell": "windows", "html": "source", "pdf": "source", "docx": "source" },
+      "boundary": "Not enabled in the Rust or GFM-only CodeMirror profile; math uses bounded dollar syntax"
+    },
+    {
+      "id": "front-matter",
+      "fixture": "---\ntitle: Example\n---\nBody",
+      "expectedConfiguredContains": "<h2>title: Example</h2>",
+      "owner": "0086",
+      "statuses": { "editor": "source", "preview": "source", "gui": "source", "cli": "source", "shell": "windows", "html": "source", "pdf": "source", "docx": "source" },
+      "boundary": "No metadata/config override channel; ordinary Markdown syntax applies"
+    },
+    {
+      "id": "document-toc",
+      "fixture": "[TOC]\n\n# Heading",
+      "expectedConfiguredContains": "<p>[TOC]</p>",
+      "owner": "0086/0096",
+      "statuses": { "editor": "source", "preview": "source", "gui": "source", "cli": "source", "shell": "windows", "html": "source", "pdf": "source", "docx": "source" },
+      "boundary": "Sidebar outline exists; [TOC] does not insert a document block"
+    }
+  ]
+}

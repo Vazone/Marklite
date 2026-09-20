@@ -1,7 +1,10 @@
+mod background;
+pub mod diagram_commands;
 pub mod export_commands;
 pub mod file_commands;
 pub mod markdown_commands;
 pub mod navigation_commands;
+pub mod open_request_commands;
 pub mod recent_commands;
 pub mod session_commands;
 pub mod settings_commands;

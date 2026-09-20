@@ -1,6 +1,7 @@
 [package]
 name = "marklite"
-version = "0.1.5"
+autobins = false
+version = "0.1.6"
 description = "A lightweight cross-platform Markdown editor."
 authors = ["Vazone"]
 license = "MIT"
@@ -13,40 +14,71 @@ rust-version = "1.88"
 name = "marklite_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "marklite"
+path = "src/main.rs"
+
+[[example]]
+name = "build_mermaid_pack"
+path = "src/tooling/build_mermaid_pack.rs"
+required-features = ["diagram-tooling"]
+
+[[example]]
+name = "validate_mermaid_fixtures"
+path = "src/tooling/validate_mermaid_fixtures.rs"
+required-features = ["diagram-tooling"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-ammonia = "4"
+ammonia = "=4.1.4"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 docx-rs = { version = "=0.4.22", default-features = true }
+gfm-autolinks = "=0.2.0"
 html-escape = "0.2"
+imagesize = { version = "=0.14.0", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+latex2mathml = "=0.2.3"
 pulldown-cmark = "0.13.3"
+quick-xml = { version = "=0.41.0", default-features = false }
 percent-encoding = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
+tex2word-math = "=1.0.6"
 url = "2"
+zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
+lopdf = { version = "=0.42.0", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "=0.38.2"
-windows = { version = "=0.61.3", features = ["Win32_Foundation"] }
+windows = { version = "=0.61.3", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.186"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.4"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSPrintInfo", "NSPrintOperation", "NSResponder", "NSView", "NSWindow"] }
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["NSDictionary", "NSGeometry", "NSObject", "NSString", "NSURL", "objc2-core-foundation"] }
-objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["WKWebView", "objc2-app-kit"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSPrintInfo", "NSPrintOperation", "NSResponder", "NSView", "NSWindow", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics", "NSGraphicsContext", "objc2-core-foundation"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["NSDictionary", "NSGeometry", "NSObject", "NSString", "NSURL", "NSData", "NSError", "objc2-core-foundation"] }
+objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["WKWebView", "WKSnapshotConfiguration", "block2", "objc2-app-kit", "objc2-core-foundation"] }
+block2 = "=0.6.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "=0.18.2"
 webkit2gtk = "=2.0.2"
+cairo-rs = { version = "=0.18.5", features = ["png"] }
 
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+diagram-tooling = []
+
+[dev-dependencies]
+tempfile = "3"

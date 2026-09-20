@@ -1,4 +1,4 @@
-import { mount } from 'svelte';
+import { mount, unmount } from 'svelte';
 import './styles/globals.css';
 import './styles/themes.css';
 import './styles/markdown-preview.css';
@@ -15,6 +15,7 @@ import {
   type FrontendStartupCode,
   type FrontendStartupEvent
 } from './lib/startupLifecycle';
+import { appInitialization } from './lib/appInitialization';
 
 const startedAt = performance.now();
 let app: ReturnType<typeof mount> | undefined;
@@ -52,6 +53,7 @@ async function bootstrap(): Promise<void> {
       elapsedMs: startupElapsedMs(startedAt)
     });
     root.replaceChildren();
+    const initialization = appInitialization.wait();
     app = mount(App, { target: root });
     reportStartupEvent({
       stage: 'svelteMount',
@@ -59,6 +61,8 @@ async function bootstrap(): Promise<void> {
       code: null,
       elapsedMs: startupElapsedMs(startedAt)
     });
+    fallbackCode = 'initializationFailed';
+    await initialization;
 
     reportStartupEvent({
       stage: 'domReady',
@@ -87,6 +91,8 @@ async function bootstrap(): Promise<void> {
         ? 'frontendEntry'
         : code === 'svelteMountFailed'
           ? 'svelteMount'
+          : code === 'initializationFailed'
+            ? 'initialization'
           : 'domReady';
     reportStartupEvent({
       stage,
@@ -94,6 +100,11 @@ async function bootstrap(): Promise<void> {
       code,
       elapsedMs: startupElapsedMs(startedAt)
     });
+
+    if (app) {
+      await unmount(app);
+      app = undefined;
+    }
 
     renderStartupRecovery(
       document,
@@ -106,7 +117,7 @@ async function bootstrap(): Promise<void> {
         const button = document.querySelector<HTMLButtonElement>('.startup-recovery button');
         if (button) {
           button.disabled = true;
-          button.textContent = '已达到一次重试上限';
+          button.textContent = 'The one-retry limit has been reached.';
         }
       },
       async () => {

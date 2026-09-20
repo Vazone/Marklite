@@ -12,76 +12,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+Import-Module (Join-Path $PSScriptRoot "lib\WindowsPackaging.psm1") -Force
+
 if ([string]::IsNullOrWhiteSpace($RootPath)) {
   $RootPath = Join-Path $PSScriptRoot ".."
-}
-
-function Invoke-CheckedNative {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$FilePath,
-    [Parameter(Mandatory = $true)]
-    [string[]]$Arguments,
-    [Parameter(Mandatory = $true)]
-    [string]$Description
-  )
-
-  & $FilePath @Arguments
-  $exitCode = $LASTEXITCODE
-  if ($null -eq $exitCode) {
-    $exitCode = 0
-  }
-  if ($exitCode -ne 0) {
-    throw "$Description failed with exit code $exitCode."
-  }
-}
-
-function Assert-WorkspacePath {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$Path,
-    [Parameter(Mandatory = $true)]
-    [string]$WorkspaceRoot
-  )
-
-  $fullPath = [System.IO.Path]::GetFullPath($Path)
-  $rootPrefix = $WorkspaceRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
-  if (-not $fullPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "Refusing to modify a packaging path outside the workspace: $fullPath"
-  }
-
-  return $fullPath
-}
-
-function Remove-WorkspaceFileIfPresent {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$Path,
-    [Parameter(Mandatory = $true)]
-    [string]$WorkspaceRoot
-  )
-
-  $validatedPath = Assert-WorkspacePath -Path $Path -WorkspaceRoot $WorkspaceRoot
-  if (Test-Path -LiteralPath $validatedPath) {
-    if (-not (Test-Path -LiteralPath $validatedPath -PathType Leaf)) {
-      throw "Expected a file but found another filesystem object: $validatedPath"
-    }
-    Remove-Item -LiteralPath $validatedPath -Force
-  }
-}
-
-function Get-Sha256Hex {
-  param([Parameter(Mandatory = $true)][string]$Path)
-
-  $stream = [System.IO.File]::OpenRead($Path)
-  $sha256 = [System.Security.Cryptography.SHA256]::Create()
-  try {
-    $bytes = $sha256.ComputeHash($stream)
-    return (($bytes | ForEach-Object { $_.ToString("x2") }) -join "")
-  } finally {
-    $sha256.Dispose()
-    $stream.Dispose()
-  }
 }
 
 $root = (Resolve-Path -LiteralPath $RootPath).Path
@@ -127,6 +61,13 @@ try {
   }
   if ((Get-Item -LiteralPath $installerScript).Length -le 0) {
     throw "Tauri produced an empty NSIS script: $installerScript"
+  }
+  if (-not $SkipTauriBuild) {
+    $generatedInstaller = Get-Content -Raw -LiteralPath $installerScript
+    if (-not $generatedInstaller.Contains('/oname=marklite-cli.exe') -or
+        -not $generatedInstaller.Contains('Delete "$INSTDIR\marklite-cli.exe"')) {
+      throw 'Tauri NSIS output does not install and remove marklite-cli.exe beside the main binary.'
+    }
   }
 
   & (Join-Path $PSScriptRoot "patch-nsis-installer.ps1") -InstallerScript $installerScript
@@ -183,10 +124,7 @@ try {
 
   if (-not $SkipEvidence) {
     $buildMode = $(if ($SkipTauriBuild) { "skip-tauri-build" } else { "full" })
-    $windowsPowerShell = Join-Path $PSHOME "powershell.exe"
-    if (-not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf)) {
-      throw "Windows PowerShell executable was not found: $windowsPowerShell"
-    }
+    $windowsPowerShell = Resolve-WindowsPowerShellPath
     Invoke-CheckedNative -FilePath $windowsPowerShell -Arguments @(
       "-NoProfile",
       "-ExecutionPolicy", "Bypass",

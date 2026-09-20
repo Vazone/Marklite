@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "suite": "GFM 0.29-gfm",
+  "exceptions": [
+    { "example": 140, "status": "safety-divergence", "reason": "Executable script HTML is escaped by the product GFM event filter.", "actualSha256": "dcb8a2be6dec8da77fabfba2a37a665b673090981bf3346fd227f28294a62108" },
+    { "example": 141, "status": "safety-divergence", "reason": "Executable style HTML is escaped by the product GFM event filter.", "actualSha256": "979b158d4489078c350244ea902c3b15cfc9f0fe3f132f24bea279e82dc7d2aa" },
+    { "example": 142, "status": "safety-divergence", "reason": "Executable style HTML is escaped by the product GFM event filter.", "actualSha256": "458fa903aba08d7a1466af4629de345666774780f565b13aeeac35def1b9fa70" },
+    { "example": 145, "status": "safety-divergence", "reason": "Executable style HTML is escaped by the product GFM event filter.", "actualSha256": "bb69aa64f81323f4345ff84cc5f20667b766a17a1ebf0f08298a9a8ae8bc29cc" },
+    { "example": 147, "status": "safety-divergence", "reason": "Executable script HTML is escaped by the product GFM event filter.", "actualSha256": "c7184de9b23742b24f3b5144ad24bc230eec9e6ecc8569340062f010eea902b8" },
+    { "example": 617, "status": "dialect-divergence", "reason": "The GFM autolink extension also links a URL inside this older baseline example.", "actualSha256": "5d75dfc6bbc3b6e89bc51105b3dce0ad33a489385c0e9d6aed8e29e0136b9414" },
+    { "example": 620, "status": "dialect-divergence", "reason": "The GFM autolink extension links the bare URL omitted by the older baseline example.", "actualSha256": "6e424370fafc3bdbad0cb5b54ca32a6d9c8c37619950835747a785fd42caf4d4" },
+    { "example": 621, "status": "dialect-divergence", "reason": "The GFM autolink extension links the bare email omitted by the older baseline example.", "actualSha256": "f68edffb84bc5c07a0b6dc49adc249e2b0e2bc0ee9f7105a062780ce6aa3ff8d" },
+    { "example": 649, "status": "dialect-divergence", "reason": "The current CommonMark parser recognizes this malformed-comment shape differently from the GFM 0.29 baseline.", "actualSha256": "ccb7023193f5d035c7b194047d3f1215564308f0697508d8fad3a51feba04724" },
+    { "example": 650, "status": "dialect-divergence", "reason": "The current CommonMark parser recognizes these malformed-comment shapes differently from the GFM 0.29 baseline.", "actualSha256": "95dd37ca9a59fbd8b8d2dfee9a37ac6cc7449cbe5c406bfd136ae9279fe7f5cc" }
+  ]
+}

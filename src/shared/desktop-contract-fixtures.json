@@ -1,0 +1,232 @@
+{
+  "exportProgress": {
+    "jobId": "export-progress-fixture",
+    "format": "png",
+    "sequence": 7,
+    "stage": "writing",
+    "status": "running",
+    "work": { "kind": "chapter", "index": 2, "total": 3, "completed": 1 }
+  },
+  "documentOperation": {
+    "document": {
+      "path": "C:\\notes\\contract.md",
+      "fileIdentity": "windows:7:42",
+      "contentVersion": "sha256:contract",
+      "title": "contract.md",
+      "content": "# Contract",
+      "isDirty": false,
+      "lastSavedAt": null,
+      "fileSize": 10
+    },
+    "auxiliaryError": {
+      "code": "RECENT_FILES_WRITE_FAILED",
+      "message": "最近文件更新失败"
+    }
+  },
+  "untitledDocument": {
+    "path": null,
+    "fileIdentity": null,
+    "contentVersion": null,
+    "title": "Untitled",
+    "content": "",
+    "isDirty": false,
+    "lastSavedAt": null,
+    "fileSize": null
+  },
+  "fileVersion": {
+    "fileIdentity": "windows:7:42",
+    "contentVersion": "sha256:contract"
+  },
+  "recentPersistence": {
+    "version": 1,
+    "files": [
+      {
+        "path": "C:\\notes\\contract.md",
+        "title": "contract.md",
+        "lastOpenedAt": "2026-08-13T00:00:00Z"
+      }
+    ]
+  },
+  "recentResponse": [
+    {
+      "path": "C:\\notes\\contract.md",
+      "title": "contract.md",
+      "lastOpenedAt": "2026-08-13T00:00:00Z"
+    }
+  ],
+  "session": {
+    "version": 1,
+    "paths": ["C:\\notes\\contract.md"],
+    "activePath": null
+  },
+  "startupEvent": {
+    "stage": "frontendEntry",
+    "status": "failed",
+    "code": "unhandledError",
+    "elapsedMs": 12
+  },
+  "startupReady": {
+    "launchId": "launch-1",
+    "webviewVersion": null
+  },
+  "appError": {
+    "code": "UNSUPPORTED_PATH_ENCODING",
+    "message": "当前路径无法无损表示为 UTF-8，MarkLite 已拒绝该路径"
+  },
+  "virtualPreviewIndex": {
+    "sessionId": "session-7",
+    "segments": [
+      { "startUtf16": 0, "endUtf16": 16, "startLine": 1, "endLine": 2, "estimatedHeight": 64, "estimatedNodes": 2 },
+      { "startUtf16": 16, "endUtf16": 32, "startLine": 3, "endLine": 4, "estimatedHeight": 80, "estimatedNodes": 3 }
+    ]
+  },
+  "virtualPreviewWindow": {
+    "sessionId": "session-7",
+    "start": 0,
+    "end": 1,
+    "segments": [{
+      "index": 0,
+      "html": "<p>First</p>",
+      "sourceBlockStart": 0,
+      "sourceBlocks": [{ "startUtf16": 0, "endUtf16": 16, "startLine": 1, "endLine": 2 }],
+      "diagrams": [],
+      "diagramDiagnostics": []
+    }]
+  },
+  "renderedMarkdown": {
+    "html": "<h1 id=\"contract\">Contract</h1>",
+    "sourceBlocks": [
+      {
+        "startUtf16": 0,
+        "endUtf16": 10,
+        "startLine": 1,
+        "endLine": 1
+      }
+    ],
+    "diagrams": [
+      {
+        "diagramId": "diagram-0-bd82be55b98e",
+        "ordinal": 0,
+        "sourceUtf8": "flowchart TD\nA-->B\n",
+        "sourceSha256": "bd82be55b98e9030585603754372f5e90ae47e48336f0f05284d4290f0cd52f8",
+        "sourceStartByte": 11,
+        "sourceEndByte": 30
+      }
+    ],
+    "diagramDiagnostics": [],
+    "outline": [
+      {
+        "level": 1,
+        "title": "Contract",
+        "line": 1,
+        "slug": "contract"
+      }
+    ],
+    "stats": {
+      "wordCount": 1,
+      "characterCount": 10,
+      "lineCount": 1,
+      "headingCount": 1,
+      "linkCount": 0,
+      "imageCount": 0
+    }
+  },
+  "markdownAnalysis": {
+    "outline": [
+      {
+        "level": 1,
+        "title": "Contract",
+        "line": 1,
+        "slug": "contract"
+      }
+    ],
+    "stats": {
+      "wordCount": 1,
+      "characterCount": 10,
+      "lineCount": 1,
+      "headingCount": 1,
+      "linkCount": 0,
+      "imageCount": 0
+    }
+  },
+  "markdownTargets": [
+    { "kind": "anchor", "fragment": "contract" },
+    {
+      "kind": "localDocument",
+      "path": "C:\\notes\\other.md",
+      "fragment": "section"
+    },
+    { "kind": "external", "url": "https://example.com/docs" },
+    { "kind": "email", "address": "writer@example.com" }
+  ],
+  "exportRequest": {
+    "snapshot": {
+      "jobId": "job-1",
+      "tabId": "tab-1",
+      "contentRevision": 3,
+      "sourcePath": "C:\\notes\\contract.md",
+      "title": "contract.md",
+      "content": "# Contract"
+    },
+    "targetPath": "C:\\exports\\contract.pdf",
+    "format": "pdf",
+    "mindMapSvg": null,
+    "options": {
+      "paperSize": "a4",
+      "orientation": "portrait",
+      "margin": "normal",
+      "includeTitle": true,
+      "includeLocalImages": true
+    }
+  },
+  "exportResult": {
+    "jobId": "job-1",
+    "format": "pdf",
+    "path": "C:\\exports\\contract.pdf",
+    "warnings": [
+      {
+        "code": "LOCAL_IMAGE_SKIPPED",
+        "message": "一张本地图片未嵌入",
+        "target": "missing.png"
+      }
+    ]
+  },
+  "localImageResponse": {
+    "metadata": {
+      "entries": [
+        {
+          "target": "marklite:image%2Epng",
+          "resourceIndex": 0,
+          "error": null
+        }
+      ],
+      "resources": [
+        {
+          "mime": "image/png",
+          "path": "C:\\docs\\image.png",
+          "width": 1,
+          "height": 1,
+          "encodedBytes": 8,
+          "decodedBytes": 4,
+          "offset": 0
+        }
+      ]
+    },
+    "payloadBase64": "iVBORw0KGgo=",
+    "responseBase64": "0AAAAHsiZW50cmllcyI6W3sidGFyZ2V0IjoibWFya2xpdGU6aW1hZ2UlMkVwbmciLCJyZXNvdXJjZUluZGV4IjowLCJlcnJvciI6bnVsbH1dLCJyZXNvdXJjZXMiOlt7Im1pbWUiOiJpbWFnZS9wbmciLCJwYXRoIjoiQzpcXGRvY3NcXGltYWdlLnBuZyIsIndpZHRoIjoxLCJoZWlnaHQiOjEsImVuY29kZWRCeXRlcyI6OCwiZGVjb2RlZEJ5dGVzIjo0LCJvZmZzZXQiOjB9XX2JUE5HDQoaCg=="
+  },
+  "startupDiagnosticsExport": {
+    "recordCount": 4
+  },
+  "exportPathSuggestion": {
+    "path": "C:\\exports\\new.html",
+    "warning": {
+      "code": "EXPORT_LOCATION_READ_FAILED",
+      "message": "fixture warning"
+    }
+  },
+  "exportLocationPersistence": {
+    "version": 1,
+    "directory": "C:\\exports"
+  }
+}

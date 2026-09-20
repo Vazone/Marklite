@@ -12,33 +12,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+Import-Module (Join-Path $PSScriptRoot "lib\WindowsPackaging.psm1") -Force
+
 if ([string]::IsNullOrWhiteSpace($RootPath)) {
   $RootPath = Join-Path $PSScriptRoot ".."
-}
-
-function Assert-WorkspacePath {
-  param([string]$Path, [string]$WorkspaceRoot)
-
-  $fullPath = [System.IO.Path]::GetFullPath($Path)
-  $rootPrefix = $WorkspaceRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
-  if (-not $fullPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "Release evidence path is outside the workspace: $fullPath"
-  }
-  return $fullPath
-}
-
-function Get-Sha256Hex {
-  param([string]$Path)
-
-  $stream = [System.IO.File]::OpenRead($Path)
-  $sha256 = [System.Security.Cryptography.SHA256]::Create()
-  try {
-    $bytes = $sha256.ComputeHash($stream)
-    return (($bytes | ForEach-Object { $_.ToString("x2") }) -join "")
-  } finally {
-    $sha256.Dispose()
-    $stream.Dispose()
-  }
 }
 
 function Get-OptionalSha256Hex {
@@ -48,13 +25,6 @@ function Get-OptionalSha256Hex {
     return $null
   }
   return Get-Sha256Hex -Path $Path
-}
-
-function Write-Utf8WithoutBom {
-  param([string]$Path, [string]$Value)
-
-  $encoding = New-Object System.Text.UTF8Encoding($false)
-  [System.IO.File]::WriteAllText($Path, $Value, $encoding)
 }
 
 function Test-PortableExecutableHasCertificateTable {

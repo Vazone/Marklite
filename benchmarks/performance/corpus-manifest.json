@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "generator": "scripts/performance/generate-corpus.mjs",
+  "files": [
+    {
+      "name": "representative-10-kib.md",
+      "kind": "representative",
+      "bytes": 10240,
+      "sha256": "a8fe89b8220fc793d0647c0af8b051980b9184b6615e751d2408a9fd26c6eddc"
+    },
+    {
+      "name": "representative-100-kib.md",
+      "kind": "representative",
+      "bytes": 102400,
+      "sha256": "d5248326547779ebefbaf01353bd26a3896ab019e62e418d7f0d27355ff44be7"
+    },
+    {
+      "name": "representative-500-kib.md",
+      "kind": "representative",
+      "bytes": 512000,
+      "sha256": "e5e5f4c06b01040e76207184348e0a19d1f7171b5f5b5e2a163be134914c7713"
+    },
+    {
+      "name": "representative-1-mib.md",
+      "kind": "representative",
+      "bytes": 1048576,
+      "sha256": "7f23d852c917a816c8095262e581f1c1a0fd5f7ffa5fe3bde89b5d84a2454d69"
+    },
+    {
+      "name": "representative-5-mib.md",
+      "kind": "representative",
+      "bytes": 5242880,
+      "sha256": "a48967e2b10f548fddf843c7abfe58b28278a3e049d2ffea0488e5753ae873e8"
+    },
+    {
+      "name": "representative-10-mib.md",
+      "kind": "representative",
+      "bytes": 10485760,
+      "sha256": "3100553bb2780e6457ea03e1302ed1b90e0c13aba6a465b264f1ab807e572db4"
+    },
+    {
+      "name": "mixed-100-kib.md",
+      "kind": "mixed",
+      "bytes": 102400,
+      "sha256": "f87acd4949a7852c91acaecc3f8823a168175a28e313fed29d5daaf31f8a7b20"
+    },
+    {
+      "name": "mixed-500-kib.md",
+      "kind": "mixed",
+      "bytes": 512000,
+      "sha256": "7770751ff1059881713fb90b480d00d09eb84e654ad4bbf81e4a3d8312151aee"
+    },
+    {
+      "name": "single-line-5-mib.md",
+      "kind": "singleLongLine",
+      "bytes": 5242880,
+      "sha256": "40032424e8e4948e0da57d05aa5f63d49dc6ac0214935925cd846525b8f6e338"
+    },
+    {
+      "name": "lines-130000.md",
+      "kind": "manyLines",
+      "bytes": 7396590,
+      "sha256": "828a4295ceff7514d4f776c799916c0718c9979b512efdcd6742e0f3cb218129"
+    },
+    {
+      "name": "headings-150000.md",
+      "kind": "manyHeadings",
+      "bytes": 4808340,
+      "sha256": "ea157ce08bf93d48dca82a236e59dca79c427e60e328b938249a956c3697bd33"
+    },
+    {
+      "name": "dense-search-5-mib.md",
+      "kind": "denseSearch",
+      "bytes": 5242880,
+      "sha256": "95404ccde219a7d436c16650850b111e27531a709737c36a146ebb3916392639"
+    },
+    {
+      "name": "scroll-markers-1000.md",
+      "kind": "scrollMarkers",
+      "bytes": 24000,
+      "sha256": "f779632fa96a811f74fff25d97a9854346599ff031f99346b92fcf5731dbaf06"
+    },
+    {
+      "name": "scroll-fold-markers-1000.md",
+      "kind": "foldMarkers",
+      "bytes": 24900,
+      "sha256": "bb3134bd9d35ba8a46f1397156fbde66dbeec54bf2151ef59bf992084a6668e3"
+    }
+  ]
+}

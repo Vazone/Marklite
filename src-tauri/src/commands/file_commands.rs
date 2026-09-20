@@ -4,16 +4,21 @@ use std::{
 };
 
 use crate::{
+    commands::background::run_background,
     models::{
         app_error::AppError,
-        document::{DocumentDto, DocumentOperationDto},
+        document::{DocumentDto, DocumentOperationDto, FileVersionDto},
     },
     services::{file_service, recent_files_service, settings_service},
-    utils::path_utils::canonicalize_path,
+    utils::path_utils::{canonicalize_path, path_to_utf8},
 };
 
 #[tauri::command]
-pub fn open_markdown_file(path: String) -> Result<DocumentOperationDto, AppError> {
+pub async fn open_markdown_file(path: String) -> Result<DocumentOperationDto, AppError> {
+    run_background("打开文档", move || open_markdown_file_inner(path)).await
+}
+
+fn open_markdown_file_inner(path: String) -> Result<DocumentOperationDto, AppError> {
     let document = file_service::read_markdown_file(&path)?;
     let recent_path = document.path.as_deref().unwrap_or(&path).to_string();
     Ok(complete_document_operation(
@@ -23,8 +28,61 @@ pub fn open_markdown_file(path: String) -> Result<DocumentOperationDto, AppError
 }
 
 #[tauri::command]
-pub fn save_markdown_file(path: String, content: String) -> Result<DocumentOperationDto, AppError> {
-    let document = file_service::save_markdown_file(&path, &content)?;
+pub async fn save_markdown_file(
+    path: String,
+    content: String,
+    expected_file_identity: Option<String>,
+    expected_content_version: Option<String>,
+    overwrite_content_conflict: bool,
+) -> Result<DocumentOperationDto, AppError> {
+    run_background("保存文档", move || {
+        save_markdown_file_inner(
+            path,
+            content,
+            expected_file_identity,
+            expected_content_version,
+            overwrite_content_conflict,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn resolve_file_version(
+    path: String,
+    allow_missing: bool,
+) -> Result<Option<FileVersionDto>, AppError> {
+    run_background("解析文件版本", move || {
+        file_service::resolve_file_version(&path, allow_missing)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn resolve_file_identity(
+    path: String,
+    allow_missing: bool,
+) -> Result<Option<String>, AppError> {
+    run_background("解析文件身份", move || {
+        file_service::resolve_file_identity(&path, allow_missing)
+    })
+    .await
+}
+
+fn save_markdown_file_inner(
+    path: String,
+    content: String,
+    expected_file_identity: Option<String>,
+    expected_content_version: Option<String>,
+    overwrite_content_conflict: bool,
+) -> Result<DocumentOperationDto, AppError> {
+    let document = file_service::save_markdown_file(
+        &path,
+        &content,
+        expected_file_identity.as_deref(),
+        expected_content_version.as_deref(),
+        overwrite_content_conflict,
+    )?;
     let recent_path = document.path.as_deref().unwrap_or(&path).to_string();
     Ok(complete_document_operation(
         document,
@@ -48,11 +106,15 @@ fn complete_document_operation(
 }
 
 #[tauri::command]
-pub fn get_startup_file_arg() -> Result<Option<String>, AppError> {
+pub async fn get_startup_file_arg() -> Result<Option<String>, AppError> {
+    run_background("读取启动参数", get_startup_file_arg_inner).await
+}
+
+fn get_startup_file_arg_inner() -> Result<Option<String>, AppError> {
     let cwd = env::current_dir().map_err(|error| AppError::file_read_failed(".", error))?;
     for arg in env::args().skip(1) {
         if let Some(path) = canonical_startup_file(Path::new(&arg), &cwd)? {
-            return Ok(Some(path.to_string_lossy().to_string()));
+            return Ok(Some(path_to_utf8(&path)?.to_string()));
         }
     }
 
@@ -60,7 +122,14 @@ pub fn get_startup_file_arg() -> Result<Option<String>, AppError> {
 }
 
 #[tauri::command]
-pub fn show_in_file_manager(path: String) -> Result<(), AppError> {
+pub async fn show_in_file_manager(path: String) -> Result<(), AppError> {
+    run_background("打开文件管理器", move || {
+        show_in_file_manager_inner(path)
+    })
+    .await
+}
+
+fn show_in_file_manager_inner(path: String) -> Result<(), AppError> {
     let target = file_manager_target(&path)?;
     let result = match target {
         FileManagerTarget::Reveal(path) => tauri_plugin_opener::reveal_item_in_dir(path),
@@ -88,9 +157,10 @@ fn canonical_startup_file(path: &Path, cwd: &Path) -> Result<Option<PathBuf>, Ap
     if !candidate.is_file() || file_service::ensure_allowed_file(&candidate).is_err() {
         return Ok(None);
     }
+    let candidate_display = path_to_utf8(&candidate)?;
     canonicalize_path(&candidate)
         .map(Some)
-        .map_err(|error| AppError::file_read_failed(&candidate.to_string_lossy(), error))
+        .map_err(|error| AppError::file_read_failed(candidate_display, error))
 }
 
 #[derive(Debug, PartialEq)]
@@ -128,12 +198,17 @@ mod tests {
     use super::{
         canonical_startup_file, complete_document_operation, file_manager_target, FileManagerTarget,
     };
-    use crate::models::{app_error::AppError, document::DocumentDto};
+    use crate::{
+        models::{app_error::AppError, document::DocumentDto},
+        utils::test_support::TestDirectory,
+    };
 
     #[test]
     fn preserves_the_document_when_an_auxiliary_update_fails() {
         let document = DocumentDto {
             path: Some("C:\\note.md".to_string()),
+            file_identity: Some("test-identity".to_string()),
+            content_version: Some("sha256:test".to_string()),
             title: "note.md".to_string(),
             content: "saved".to_string(),
             is_dirty: false,
@@ -160,15 +235,7 @@ mod tests {
 
     #[test]
     fn startup_candidates_resolve_relative_and_require_regular_markdown_files() {
-        let dir = std::env::temp_dir().join(format!(
-            "marklite-startup-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
+        let dir = TestDirectory::new("startup-candidates");
         let markdown = dir.join("note.md");
         let other = dir.join("note.exe");
         let directory = dir.join("folder.md");
@@ -186,20 +253,11 @@ mod tests {
         );
         assert!(canonical_startup_file(&other, &dir).unwrap().is_none());
         assert!(canonical_startup_file(&directory, &dir).unwrap().is_none());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn file_manager_target_rejects_broad_or_invalid_paths_without_spawning() {
-        let dir = std::env::temp_dir().join(format!(
-            "marklite-file-manager-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
+        let dir = TestDirectory::new("file-manager-target");
         let markdown = dir.join("note.md");
         let directory = dir.join("folder.md");
         fs::write(&markdown, "note").unwrap();
@@ -240,6 +298,5 @@ mod tests {
                 .code,
             "FILE_NOT_FOUND"
         );
-        fs::remove_dir_all(dir).unwrap();
     }
 }

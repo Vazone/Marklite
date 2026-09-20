@@ -8,21 +8,21 @@
     MIN_SIDEBAR_WIDTH,
     SIDEBAR_COLLAPSE_THRESHOLD
   } from '../../lib/sidebarResize';
+  import { createPointerResizeLifecycle, type PointerResizeLifecycle } from '../../lib/pointerResizeLifecycle';
+  import { translator } from '../../lib/i18n';
 
   export let width = 280;
-  export let onWidthChange: (width: number) => void = () => {};
-  export let onCommit: (rawWidth: number, visibleWidth: number, workspaceWidth: number) => void = () => {};
-  export let onCollapse: () => void = () => {};
+  export let onWidthChange: (width: number) => void;
+  export let onCommit: (rawWidth: number, visibleWidth: number, workspaceWidth: number) => void;
+  export let onCollapse: () => void;
 
   let separator: HTMLElement;
   let workspace: HTMLElement | null = null;
   let workspaceWidth = 0;
   let dragging = false;
   let collapseIntent = false;
-  let pointerId: number | null = null;
   let startWidth = width;
-  let frame: number | null = null;
-  let pendingClientX: number | null = null;
+  let dragLifecycle: PointerResizeLifecycle;
   let resizeObserver: ResizeObserver | null = null;
   let mediaQuery: MediaQueryList | null = null;
 
@@ -39,16 +39,26 @@
       resizeObserver = new ResizeObserver(measureWorkspace);
       resizeObserver.observe(workspace);
     }
+    dragLifecycle = createPointerResizeLifecycle({
+      element: separator,
+      bodyClass: 'sidebar-resize-dragging',
+      onSample: previewPointer,
+      onStart: () => {
+        dragging = true;
+      },
+      onCommit: () => {
+        dragging = false;
+      },
+      onCancel: restoreStartWidth
+    });
   });
 
   onDestroy(() => {
-    cancelActiveDrag();
-    cancelFrame();
+    dragLifecycle?.dispose();
     resizeObserver?.disconnect();
     window.removeEventListener('resize', measureWorkspace);
     window.removeEventListener('blur', cancelActiveDrag);
     mediaQuery?.removeEventListener('change', handleViewportChange);
-    endGlobalDragState();
   });
 
   function isNarrowViewport(): boolean {
@@ -69,7 +79,7 @@
       sidebarMaximum(measured),
       Math.max(MIN_SIDEBAR_WIDTH, width)
     );
-    if (!dragging && Math.abs(clamped - width) > 0.5) {
+    if (!dragLifecycle?.active && Math.abs(clamped - width) > 0.5) {
       onCommit(clamped, clamped, workspaceWidth);
     }
   }
@@ -84,79 +94,50 @@
   function handlePointerDown(event: PointerEvent): void {
     if (event.button !== 0 || event.isPrimary === false || isNarrowViewport()) return;
     event.preventDefault();
-    dragging = true;
-    pointerId = event.pointerId;
     startWidth = width;
     collapseIntent = false;
-    separator.setPointerCapture?.(event.pointerId);
-    document.body.classList.add('sidebar-resize-dragging');
-    schedulePointer(event.clientX);
+    dragLifecycle.start(event);
+    dragLifecycle.schedule(event.clientX);
   }
 
   function handlePointerMove(event: PointerEvent): void {
-    if (!dragging || event.pointerId !== pointerId) return;
+    if (!dragLifecycle.active || event.pointerId !== dragLifecycle.pointerId) return;
     event.preventDefault();
-    schedulePointer(event.clientX);
+    dragLifecycle.schedule(event.clientX);
   }
 
   function handlePointerUp(event: PointerEvent): void {
-    if (!dragging || event.pointerId !== pointerId) return;
+    if (!dragLifecycle.active || event.pointerId !== dragLifecycle.pointerId) return;
     event.preventDefault();
-    cancelFrame();
     const { raw, visible } = pointerWidth(event.clientX);
     onWidthChange(visible);
     onCommit(raw, visible, workspaceWidth);
-    endGlobalDragState();
-    endPointerCapture(event.pointerId);
+    collapseIntent = false;
+    dragLifecycle.commit(event);
   }
 
   function handlePointerCancel(event: PointerEvent): void {
-    if (!dragging || event.pointerId !== pointerId) return;
-    cancelActiveDrag();
+    dragLifecycle.cancel(event);
   }
 
   function handleLostPointerCapture(event: PointerEvent): void {
-    if (!dragging || event.pointerId !== pointerId) return;
-    cancelActiveDrag();
+    dragLifecycle.handleLostPointerCapture(event);
   }
 
   function cancelActiveDrag(): void {
-    if (!dragging) return;
-    cancelFrame();
-    onWidthChange(startWidth);
-    const capturedPointerId = pointerId;
-    endGlobalDragState();
-    if (capturedPointerId !== null) endPointerCapture(capturedPointerId);
+    dragLifecycle?.cancelActive();
   }
 
-  function schedulePointer(clientX: number): void {
-    pendingClientX = clientX;
-    if (frame !== null) return;
-    frame = requestAnimationFrame(() => {
-      frame = null;
-      if (!dragging || pendingClientX === null) return;
-      const { raw, visible } = pointerWidth(pendingClientX);
-      pendingClientX = null;
-      collapseIntent = raw <= SIDEBAR_COLLAPSE_THRESHOLD;
-      onWidthChange(visible);
-    });
-  }
-
-  function cancelFrame(): void {
-    if (frame !== null) cancelAnimationFrame(frame);
-    frame = null;
-    pendingClientX = null;
-  }
-
-  function endPointerCapture(id: number): void {
-    if (separator.hasPointerCapture?.(id)) separator.releasePointerCapture(id);
-  }
-
-  function endGlobalDragState(): void {
+  function restoreStartWidth(): void {
     dragging = false;
+    onWidthChange(startWidth);
     collapseIntent = false;
-    pointerId = null;
-    document.body.classList.remove('sidebar-resize-dragging');
+  }
+
+  function previewPointer(clientX: number): void {
+    const { raw, visible } = pointerWidth(clientX);
+    collapseIntent = raw <= SIDEBAR_COLLAPSE_THRESHOLD;
+    onWidthChange(visible);
   }
 
   function handleKeyDown(event: KeyboardEvent): void {
@@ -190,7 +171,7 @@
   class:dragging
   class:collapse-intent={collapseIntent}
   role="separator"
-  aria-label="调整最近文件侧栏宽度"
+  aria-label={$translator('sidebar.resize')}
   aria-orientation="vertical"
   aria-valuemin={MIN_SIDEBAR_WIDTH}
   aria-valuemax={Math.round(maximum)}
@@ -205,7 +186,7 @@
 >
   <span aria-hidden="true"></span>
   {#if collapseIntent}
-    <em aria-hidden="true">释放后收起侧栏</em>
+    <em aria-hidden="true">{$translator('sidebar.resizeCollapse')}</em>
   {/if}
 </div>
 
