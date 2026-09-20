@@ -19,9 +19,9 @@
 </div>
 
 <p align="center">
-  <img src="assets/marklite-showcase.gif" alt="MarkLite 分栏编辑、标题脑图、离线语法学习与统一导出" width="100%" />
+  <img src="assets/marklite-showcase.gif" alt="MarkLite 展示 mixed-500-kib.md 中的公式、分栏滚动与章节 PNG 导出" width="100%" />
 </p>
-<p align="center"><sub>分栏写作与预览 · 浏览标题脑图 · 离线学习 Markdown · 从一个入口完成导出</sub></p>
+<p align="center"><sub>mixed-500-kib.md（500 KiB）：公式预览、分栏滚动与章节 PNG 导出</sub></p>
 
 ## 为什么选择 MarkLite？
 

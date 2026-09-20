@@ -102,7 +102,7 @@ function renderWithProduction(cases) {
     '--target-dir', path.join(root, 'src-tauri/target'), '--', casesPath, renderedPath
   ], {
     cwd: root,
-    env: { ...process.env, MARKLITE_REVIEW_ROOT: root.replaceAll('\\', '/') },
+    env: { ...process.env, MARKLITE_TEST_ROOT: root.replaceAll('\\', '/') },
     stdio: 'inherit'
   });
   if (run.error) throw run.error;
