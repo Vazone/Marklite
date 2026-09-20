@@ -171,11 +171,8 @@ function capabilityMatrix(official) {
   const validateOwner = (owner, label) => {
     const ids = owner.match(/\d{4}/g) ?? [];
     if (!ids.length) throw new Error(`Missing TaskCard owner: ${label}`);
-    for (const id of ids) {
-      const exists = ['active', 'done', 'blocked'].some((folder) =>
-        fs.readdirSync(path.join(root, 'TaskCards', folder)).some((file) => file.startsWith(`${id}-`)));
-      if (!exists) throw new Error(`Unknown TaskCard ${id}: ${label}`);
-    }
+    // Card-file existence belongs to the local governance check. Public source
+    // distributions retain the capability metadata but do not ship TaskCards.
   };
   validateStatuses(contract.surfaceDefaults, 'surfaceDefaults');
   const chapters = new Map();
