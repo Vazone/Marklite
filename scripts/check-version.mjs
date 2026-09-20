@@ -44,7 +44,7 @@ if (mismatches.length > 0) {
   );
 }
 
-const releaseTag = process.env.RELEASE_TAG ?? process.env.GITHUB_REF_NAME;
+const releaseTag = process.env.RELEASE_TAG ?? (process.env.GITHUB_REF_TYPE === 'tag' ? process.env.GITHUB_REF_NAME : undefined);
 if (releaseTag && releaseTag !== `v${expected}`) {
   throw new Error(`Release tag ${releaseTag} does not match application version v${expected}`);
 }

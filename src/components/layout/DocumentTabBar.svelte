@@ -1,23 +1,22 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import type { EditorTab } from '../../app/stores/documentStore';
+  import type { DocumentTabDescriptor } from '../../app/stores/documentStore';
+  import { clampContextMenuPosition, type ContextMenuPosition } from '../../lib/contextMenuPosition';
+  import { translator } from '../../lib/i18n';
 
-  export let tabs: EditorTab[] = [];
+  export let tabs: DocumentTabDescriptor[] = [];
   export let activeTabId: string | null = null;
-  export let onActivate: (tabId: string) => void = () => {};
-  export let onClose: (tabId: string) => void = () => {};
-  export let onCloseOthers: (tabId: string) => void = () => {};
-  export let onCloseRight: (tabId: string) => void = () => {};
+  export let onActivate: (tabId: string) => void;
+  export let onClose: (tabId: string) => void | Promise<void>;
+  export let onCloseOthers: (tabId: string) => void | Promise<void>;
+  export let onCloseRight: (tabId: string) => void | Promise<void>;
 
-  type ContextMenuState = {
+  type ContextMenuState = ContextMenuPosition & {
     tabId: string;
-    x: number;
-    y: number;
   };
 
   const menuWidth = 210;
   const menuHeight = 116;
-  const viewportPadding = 8;
   let tabbarElement: HTMLDivElement | null = null;
   let contextMenu: ContextMenuState | null = null;
   let menuElement: HTMLDivElement | null = null;
@@ -54,15 +53,15 @@
     };
   });
 
-  function clampPosition(x: number, y: number) {
-    return {
-      x: Math.max(viewportPadding, Math.min(x, window.innerWidth - menuWidth - viewportPadding)),
-      y: Math.max(viewportPadding, Math.min(y, window.innerHeight - menuHeight - viewportPadding))
-    };
-  }
-
   async function openContextMenu(tabId: string, x: number, y: number, trigger: HTMLButtonElement) {
-    const position = clampPosition(x, y);
+    const position = clampContextMenuPosition(
+      x,
+      y,
+      menuWidth,
+      menuHeight,
+      window.innerWidth,
+      window.innerHeight
+    );
     triggerElement = trigger;
     contextMenu = { tabId, ...position };
     await tick();
@@ -78,6 +77,24 @@
   }
 
   function handleTabKeyDown(event: KeyboardEvent, tabId: string) {
+    if (!event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+      const current = tabs.findIndex((tab) => tab.id === tabId);
+      const destination = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+        : event.key === 'ArrowRight' ? (current + 1) % tabs.length
+        : event.key === 'ArrowLeft' ? (current - 1 + tabs.length) % tabs.length : -1;
+      if (current >= 0 && destination >= 0) {
+        event.preventDefault();
+        const next = tabs[destination];
+        onActivate(next.id);
+        void tick().then(() => focusTab(next.id));
+        return;
+      }
+      if (event.key === 'Delete') {
+        event.preventDefault();
+        void closeWithFocus(tabId);
+        return;
+      }
+    }
     if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
       event.preventDefault();
       const trigger = event.currentTarget as HTMLButtonElement;
@@ -91,6 +108,24 @@
     }
   }
 
+  function focusTab(tabId: string) {
+    const button = [...(tabbarElement?.querySelectorAll<HTMLButtonElement>('.tab-main') ?? [])]
+      .find((element) => element.closest<HTMLElement>('.document-tab')?.dataset.tabId === tabId);
+    button?.focus();
+  }
+
+  async function closeWithFocus(tabId: string) {
+    const index = tabs.findIndex((tab) => tab.id === tabId);
+    await onClose(tabId);
+    await tick();
+    if (tabs.some((tab) => tab.id === tabId)) {
+      focusTab(tabId);
+    } else if (tabs.length) {
+      focusTab(activeTabId && tabs.some((tab) => tab.id === activeTabId)
+        ? activeTabId : tabs[Math.min(index, tabs.length - 1)].id);
+    }
+  }
+
   function closeContextMenu(restoreFocus: boolean) {
     const previousTrigger = triggerElement;
     contextMenu = null;
@@ -99,11 +134,17 @@
     if (restoreFocus) void tick().then(() => previousTrigger?.focus());
   }
 
-  function runMenuAction(action: (tabId: string) => void) {
+  async function runMenuAction(action: (tabId: string) => void | Promise<void>) {
     const tabId = contextMenu?.tabId;
     if (!tabId) return;
     closeContextMenu(false);
-    action(tabId);
+    if (action === onClose) {
+      await closeWithFocus(tabId);
+      return;
+    }
+    await action(tabId);
+    await tick();
+    focusTab(tabs.some((tab) => tab.id === tabId) ? tabId : activeTabId ?? '');
   }
 
   async function revealActiveTab(tabId: string | null, tabCount: number) {
@@ -144,7 +185,7 @@
   bind:this={tabbarElement}
   class="tabbar"
   role="tablist"
-  aria-label="打开的文档"
+  aria-label={$translator('tabs.ariaLabel')}
   on:wheel|nonpassive={handleWheel}
 >
   {#each tabs as tab}
@@ -168,16 +209,16 @@
         on:keydown={(event) => handleTabKeyDown(event, tab.id)}
       >
         <span class:dirty-dot={tab.isDirty}></span>
-        <span class="tab-title" class:long-title={tab.title.length > 18}>
+        <span class="tab-title">
           <span>{tab.title}</span>
         </span>
       </button>
       <button
         type="button"
         class="tab-close"
-        aria-label={`关闭 ${tab.title}`}
-        title="关闭标签页"
-        on:click|stopPropagation={() => onClose(tab.id)}
+        aria-label={$translator('tabs.close', { title: tab.title })}
+        title={$translator('tabs.closeTab')}
+        on:click|stopPropagation={() => void closeWithFocus(tab.id)}
       >
         ×
       </button>
@@ -190,15 +231,19 @@
     bind:this={menuElement}
     class="tab-context-menu"
     role="menu"
-    aria-label="标签页操作"
-    style={`left: ${contextMenu.x}px; top: ${contextMenu.y}px;`}
+    aria-label={$translator('tabs.menu')}
+    style:left={`${contextMenu.x}px`}
+    style:top={`${contextMenu.y}px`}
+    style:width={`${contextMenu.width}px`}
+    style:max-height={`${contextMenu.maxHeight}px`}
+    style:overflow-y="auto"
   >
-    <button type="button" role="menuitem" on:click={() => runMenuAction(onClose)}>关闭标签页</button>
-    <button type="button" role="menuitem" disabled={!canCloseOthers} on:click={() => runMenuAction(onCloseOthers)}>
-      关闭其他标签页
+    <button type="button" role="menuitem" on:click={() => void runMenuAction(onClose)}>{$translator('tabs.closeTab')}</button>
+    <button type="button" role="menuitem" disabled={!canCloseOthers} on:click={() => void runMenuAction(onCloseOthers)}>
+      {$translator('tabs.closeOthers')}
     </button>
-    <button type="button" role="menuitem" disabled={!canCloseRight} on:click={() => runMenuAction(onCloseRight)}>
-      关闭右侧标签页
+    <button type="button" role="menuitem" disabled={!canCloseRight} on:click={() => void runMenuAction(onCloseRight)}>
+      {$translator('tabs.closeRight')}
     </button>
   </div>
 {/if}

@@ -56,7 +56,7 @@ Var RegisterDefaultMarkdownCheckboxState
 '@
 
 $integrationLabel = Decode-Utf8Base64 "Q2hvb3NlIFdpbmRvd3MgaW50ZWdyYXRpb24gb3B0aW9ucyBmb3IgTWFya0xpdGUuIC8g6YCJ5oupIE1hcmtMaXRlIOeahCBXaW5kb3dzIOmbhuaIkOmAiemhueOAgg=="
-$contextMenuLabel = Decode-Utf8Base64 "QWRkIE9wZW4gd2l0aCBNYXJrTGl0ZSB0byB0aGUgcmlnaHQtY2xpY2sgbWVudSBmb3IgLm1kLCAubWFya2Rvd24gYW5kIC50eHQgZmlsZXMuIC8g5re75Yqg5Yiw5Y+z6ZSu6I+c5Y2V"
+$contextMenuLabel = Decode-Utf8Base64 "QWRkIE1hcmtMaXRlIE9wZW4gYW5kIFBERi9Xb3JkL0hUTUwgY29udmVyc2lvbiBjb21tYW5kcyBmb3IgTWFya2Rvd24gZmlsZXMuIC8g5re75YqgIE1hcmtMaXRlIOaJk+W8gOS4jiBQREYvV29yZC9IVE1MIOi9rOaNouiPnOWNleOAgg=="
 $defaultMarkdownLabel = Decode-Utf8Base64 "U2V0IE1hcmtMaXRlIGFzIHRoZSBkZWZhdWx0IGFwcCBmb3IgTWFya2Rvd24gZmlsZXMgKC5tZCwgLm1hcmtkb3duKS4gV2luZG93cyBtYXkgc3RpbGwgYXNrIGZvciBjb25maXJtYXRpb24gaW4gRGVmYXVsdCBBcHMuIC8g6K6+5Li6IE1hcmtkb3duIOm7mOiupOaJk+W8gOaWueW8j+OAgg=="
 
 $pagePatch = @'
@@ -137,6 +137,8 @@ Function RegisterMarkLiteContextMenu
   WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.txt\shell\MarkLite" "Icon" "$INSTDIR\${MAINBINARYNAME}.exe,0"
   WriteRegStr HKCU "Software\Classes\SystemFileAssociations\.txt\shell\MarkLite\command" "" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" $\"%1$\""
 
+  Call RegisterMarkLiteExportMenu
+
   System::Call 'Shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
 FunctionEnd
 
@@ -149,6 +151,12 @@ Function RegisterMarkLiteDefaultMarkdown
 FunctionEnd
 
 Function un.UnregisterMarkLiteIntegrations
+  Call un.UnregisterMarkLiteExportMenu
+  ReadRegStr $0 HKCU "Software\Classes\Applications\${MAINBINARYNAME}.exe\shell\open\command" ""
+  ${If} $0 != "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" $\"%1$\""
+    Return
+  ${EndIf}
+
   DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\.md\shell\MarkLite"
   DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\.markdown\shell\MarkLite"
   DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\.txt\shell\MarkLite"
@@ -174,13 +182,20 @@ Function un.UnregisterMarkLiteIntegrations
 FunctionEnd
 '@
 
+$exportMenuPatch = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'nsis/ExportMenu.nsh'), [System.Text.Encoding]::UTF8)
+$functionPatch = $exportMenuPatch + "`n" + $functionPatch
+
 $functionPatch = $functionPatch.Replace("__MARKLITE_INTEGRATION_LABEL__", $integrationLabel)
 $functionPatch = $functionPatch.Replace("__MARKLITE_CONTEXT_MENU_LABEL__", $contextMenuLabel)
 $functionPatch = $functionPatch.Replace("__MARKLITE_DEFAULT_MARKDOWN_LABEL__", $defaultMarkdownLabel)
 
 $installPatch = @'
+  Call MigrateMarkLiteExportMenus
   ${If} $RegisterContextMenuCheckboxState = ${BST_CHECKED}
+  ${OrIf} ${Silent}
     Call RegisterMarkLiteContextMenu
+  ${Else}
+    Call RemoveMarkLiteOpenMenus
   ${EndIf}
 
   ${If} $RegisterDefaultMarkdownCheckboxState = ${BST_CHECKED}
@@ -199,6 +214,9 @@ $expectedFragments = @(
   "Function PageMarkLiteIntegrations",
   "Function RegisterMarkLiteApplication",
   "Function RegisterMarkLiteContextMenu",
+  "Function RegisterMarkLiteExportMenu",
+  "Function MigrateMarkLiteExportMenus",
+  '  WriteRegStr HKCU "${MARKLITE_EXPORT_PARENT}" "ExtendedSubCommandsKey" "MarkLite.ExportCommands"',
   "Function RegisterMarkLiteDefaultMarkdown",
   "Function un.UnregisterMarkLiteIntegrations",
   '  ${If} $RegisterContextMenuCheckboxState = ${BST_CHECKED}',

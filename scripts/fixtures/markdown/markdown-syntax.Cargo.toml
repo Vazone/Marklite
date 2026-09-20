@@ -1,0 +1,21 @@
+[package]
+name = "marklite_markdown_syntax_probe"
+version = "0.0.0"
+edition = "2021"
+[workspace]
+[[bin]]
+name = "marklite_markdown_syntax_probe"
+path = "__PROBE_SOURCE__"
+[dependencies]
+ammonia = "4"
+gfm-autolinks = "=0.2.0"
+html-escape = "0.2"
+latex2mathml = "=0.2.3"
+percent-encoding = "2"
+pulldown-cmark = "0.13.3"
+quick-xml = { version = "=0.41.0", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tex2word-math = "=1.0.6"
+url = "2"

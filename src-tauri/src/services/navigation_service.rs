@@ -3,28 +3,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use base64::{engine::general_purpose::STANDARD, Engine};
 use percent_encoding::percent_decode_str;
 use url::Url;
 
 use crate::{
-    models::{
-        app_error::AppError,
-        navigation::{LocalImageDto, MarkdownTargetDto},
-    },
-    services::{file_service, settings_service},
-    utils::path_utils::canonicalize_path,
+    models::{app_error::AppError, navigation::MarkdownTargetDto},
+    services::file_service,
+    utils::path_utils::{canonicalize_path, path_to_utf8},
 };
 
 const MARKLITE_TARGET_PREFIX: &str = "marklite:";
-const MAX_IMAGE_SIZE: u64 = 10 * 1024 * 1024;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExportImage {
-    pub bytes: Vec<u8>,
-    pub mime: &'static str,
-    pub path: String,
-}
 
 pub fn resolve_markdown_target(
     document_path: Option<&str>,
@@ -66,6 +54,7 @@ pub fn resolve_markdown_target(
             "http" | "https" => Ok(MarkdownTargetDto::External {
                 url: url.to_string(),
             }),
+            "mailto" => resolve_email_target(&target, &url),
             "file" => {
                 if url
                     .host_str()
@@ -98,67 +87,26 @@ pub fn resolve_markdown_target(
     resolve_local_document(document_path, PathBuf::from(decoded), fragment)
 }
 
-pub fn load_local_image(
-    document_path: Option<&str>,
-    target: &str,
-) -> Result<LocalImageDto, AppError> {
-    load_local_image_with_permission(
-        document_path,
-        target,
-        settings_service::load_settings()?.allow_local_images,
-    )
+pub(crate) fn validated_email_url(address: &str) -> Result<String, AppError> {
+    let target = format!("mailto:{address}");
+    match resolve_markdown_target(None, &target)? {
+        MarkdownTargetDto::Email { address } => Ok(format!("mailto:{address}")),
+        _ => unreachable!("mailto target can only resolve as email"),
+    }
 }
 
-fn load_local_image_with_permission(
-    document_path: Option<&str>,
-    target: &str,
-    allow_local_images: bool,
-) -> Result<LocalImageDto, AppError> {
-    if !allow_local_images {
-        return Err(AppError::local_images_disabled());
+fn resolve_email_target(target: &str, url: &Url) -> Result<MarkdownTargetDto, AppError> {
+    let exact_gfm_mailto = gfm_autolinks::email::match_mailto(target.as_bytes())
+        .is_some_and(|(_, length)| length == target.chars().count());
+    if !exact_gfm_mailto
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path().is_empty()
+    {
+        return Err(AppError::invalid_markdown_target("邮件链接格式无效"));
     }
-    let target = unwrap_marklite_target(target)?;
-    validate_raw_target(&target)?;
-    let path = resolve_local_path(document_path, &target, false)?;
-    let metadata = fs::metadata(&path)
-        .map_err(|error| AppError::file_read_failed(&path.to_string_lossy(), error))?;
-    if metadata.len() > MAX_IMAGE_SIZE {
-        return Err(AppError::file_too_large(
-            &path.to_string_lossy(),
-            "加载图片",
-        ));
-    }
-    let bytes = fs::read(&path)
-        .map_err(|error| AppError::file_read_failed(&path.to_string_lossy(), error))?;
-    let mime = image_mime(&path, &bytes)?;
-    Ok(LocalImageDto {
-        data_url: format!("data:{mime};base64,{}", STANDARD.encode(bytes)),
-        path: path.to_string_lossy().to_string(),
-    })
-}
-
-pub fn load_local_image_for_export(
-    document_path: Option<&str>,
-    target: &str,
-) -> Result<ExportImage, AppError> {
-    let target = unwrap_marklite_target(target)?;
-    validate_raw_target(&target)?;
-    let path = resolve_local_path(document_path, &target, false)?;
-    let metadata = fs::metadata(&path)
-        .map_err(|error| AppError::file_read_failed(&path.to_string_lossy(), error))?;
-    if metadata.len() > MAX_IMAGE_SIZE {
-        return Err(AppError::file_too_large(
-            &path.to_string_lossy(),
-            "导出图片",
-        ));
-    }
-    let bytes = fs::read(&path)
-        .map_err(|error| AppError::file_read_failed(&path.to_string_lossy(), error))?;
-    let mime = image_mime(&path, &bytes)?;
-    Ok(ExportImage {
-        bytes,
-        mime,
-        path: path.to_string_lossy().to_string(),
+    Ok(MarkdownTargetDto::Email {
+        address: url.path().to_string(),
     })
 }
 
@@ -170,12 +118,12 @@ fn resolve_local_document(
     let path = resolve_local_path_from_path(document_path, path)?;
     file_service::ensure_allowed_file(&path)?;
     Ok(MarkdownTargetDto::LocalDocument {
-        path: path.to_string_lossy().to_string(),
+        path: path_to_utf8(&path)?.to_string(),
         fragment,
     })
 }
 
-fn resolve_local_path(
+pub(crate) fn resolve_local_path(
     document_path: Option<&str>,
     target: &str,
     allow_fragment: bool,
@@ -260,19 +208,21 @@ fn resolve_local_path_from_path(
             .ok_or_else(|| AppError::invalid_markdown_target("当前文档没有可用父目录"))?;
         parent.join(path)
     };
-    let canonical = canonicalize_path(&candidate)
-        .map_err(|_| AppError::file_not_found(&candidate.to_string_lossy()))?;
+    let candidate_display = path_to_utf8(&candidate)?;
+    let canonical =
+        canonicalize_path(&candidate).map_err(|_| AppError::file_not_found(candidate_display))?;
     validate_local_path_form(&canonical)?;
+    let canonical_display = path_to_utf8(&canonical)?;
     let metadata = fs::metadata(&canonical)
-        .map_err(|error| AppError::file_read_failed(&canonical.to_string_lossy(), error))?;
+        .map_err(|error| AppError::file_read_failed(canonical_display, error))?;
     if !metadata.is_file() {
-        return Err(AppError::invalid_file_target(&canonical.to_string_lossy()));
+        return Err(AppError::invalid_file_target(canonical_display));
     }
     Ok(canonical)
 }
 
 fn validate_local_path_form(path: &Path) -> Result<(), AppError> {
-    let value = path.to_string_lossy();
+    let value = path_to_utf8(path)?;
     let lower = value.to_ascii_lowercase();
     if lower.starts_with(r"\\?\")
         || lower.starts_with(r"\\.\")
@@ -298,7 +248,7 @@ fn split_local_fragment(target: &str) -> Result<(&str, Option<String>), AppError
     }
 }
 
-fn unwrap_marklite_target(target: &str) -> Result<String, AppError> {
+pub(crate) fn unwrap_marklite_target(target: &str) -> Result<String, AppError> {
     match target.strip_prefix(MARKLITE_TARGET_PREFIX) {
         Some(encoded) => decode_component(encoded),
         None => Ok(target.to_string()),
@@ -312,7 +262,7 @@ fn decode_component(value: &str) -> Result<String, AppError> {
         .map_err(|_| AppError::invalid_markdown_target("URL 编码不是有效 UTF-8"))
 }
 
-fn validate_raw_target(target: &str) -> Result<(), AppError> {
+pub(crate) fn validate_raw_target(target: &str) -> Result<(), AppError> {
     if target.trim().is_empty() || target.chars().any(char::is_control) {
         return Err(AppError::invalid_markdown_target("目标为空或包含控制字符"));
     }
@@ -344,48 +294,36 @@ fn is_drive_relative(value: &str) -> bool {
         && (bytes.len() == 2 || !matches!(bytes[2], b'/' | b'\\'))
 }
 
-fn image_mime(path: &Path, bytes: &[u8]) -> Result<&'static str, AppError> {
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let mime = match extension.as_str() {
-        "png" if bytes.starts_with(b"\x89PNG\r\n\x1a\n") => "image/png",
-        "jpg" | "jpeg" if bytes.starts_with(&[0xff, 0xd8, 0xff]) => "image/jpeg",
-        "gif" if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") => "image/gif",
-        "webp" if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" => {
-            "image/webp"
-        }
-        _ => return Err(AppError::unsupported_image_type(&path.to_string_lossy())),
-    };
-    Ok(mime)
-}
-
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::{
+        fs::{self, OpenOptions},
+        sync::Arc,
+    };
 
     use base64::{engine::general_purpose::STANDARD, Engine};
     use url::Url;
 
-    use super::{
-        is_posix_absolute, load_local_image_with_permission, resolve_markdown_target,
-        MAX_IMAGE_SIZE,
+    use super::{is_posix_absolute, resolve_markdown_target};
+    use crate::{
+        models::navigation::MarkdownTargetDto,
+        services::image_load_service::{
+            load_local_image_with_permission, load_local_image_with_permission_and_cancel,
+            set_image_read_hook, ImageLoadState, MAX_IMAGE_SIZE,
+        },
+        utils::test_support::TestDirectory,
     };
-    use crate::models::navigation::MarkdownTargetDto;
 
-    fn test_dir(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "marklite-navigation-{}-{}-{name}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&path).unwrap();
-        path
+    fn test_dir(name: &str) -> TestDirectory {
+        TestDirectory::new(&format!("navigation-{name}"))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_non_utf8_file_urls_before_returning_a_local_path_dto() {
+        let error = resolve_markdown_target(None, "file:///tmp/marklite-%80.md").unwrap_err();
+
+        assert_eq!(error.code, "UNSUPPORTED_PATH_ENCODING");
     }
 
     #[test]
@@ -408,7 +346,6 @@ mod tests {
                 fragment: Some("heading".to_string())
             }
         );
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -432,7 +369,6 @@ mod tests {
                 fragment: None,
             }
         );
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -464,15 +400,16 @@ mod tests {
                 .unwrap(),
             MarkdownTargetDto::LocalDocument { .. }
         ));
-        assert!(load_local_image_with_permission(
-            Some(&current.to_string_lossy()),
-            &image.to_string_lossy(),
-            true
-        )
-        .unwrap()
-        .data_url
-        .starts_with("data:image/png;base64,"));
-        fs::remove_dir_all(dir).unwrap();
+        assert_eq!(
+            load_local_image_with_permission(
+                Some(&current.to_string_lossy()),
+                &image.to_string_lossy(),
+                true
+            )
+            .unwrap()
+            .mime,
+            "image/png"
+        );
     }
 
     #[test]
@@ -496,7 +433,6 @@ mod tests {
                 }
             );
         }
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[cfg(windows)]
@@ -532,7 +468,6 @@ mod tests {
             }
         );
         fs::remove_dir(&alias).unwrap();
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -549,6 +484,31 @@ mod tests {
                 .unwrap(),
             MarkdownTargetDto::External { .. }
         ));
+        assert_eq!(
+            resolve_markdown_target(None, "mailto:writer@example.org").unwrap(),
+            MarkdownTargetDto::Email {
+                address: "writer@example.org".to_string()
+            }
+        );
+        assert_eq!(
+            super::validated_email_url("writer@example.org").unwrap(),
+            "mailto:writer@example.org"
+        );
+        for address in [
+            "writer@example.org?subject=unsafe",
+            "writer@example.org#fragment",
+            "writer@example.org\r\nBcc:other@example.org",
+            "javascript:alert(1)",
+        ] {
+            assert!(super::validated_email_url(address).is_err());
+        }
+        for invalid_email in [
+            "mailto:writer@example.org?subject=unsafe",
+            "mailto:writer@example.org#fragment",
+            "mailto:not-an-email",
+        ] {
+            assert!(resolve_markdown_target(None, invalid_email).is_err());
+        }
         assert!(matches!(
             resolve_markdown_target(Some(&current.to_string_lossy()), &file_url).unwrap(),
             MarkdownTargetDto::LocalDocument { .. }
@@ -612,7 +572,6 @@ mod tests {
                 MarkdownTargetDto::LocalDocument { .. }
             ));
         }
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -642,24 +601,29 @@ mod tests {
                 .unwrap();
 
         assert_eq!(disabled.code, "LOCAL_IMAGES_DISABLED");
-        assert!(loaded.data_url.starts_with("data:image/png;base64,"));
+        assert_eq!(loaded.mime, "image/png");
+        assert_eq!(loaded.bytes, png);
         let encoded_absolute = encoded_image.to_string_lossy().replace(' ', "%20");
-        assert!(load_local_image_with_permission(
-            Some(&current.to_string_lossy()),
-            &encoded_absolute,
-            true
-        )
-        .unwrap()
-        .data_url
-        .starts_with("data:image/png;base64,"));
-        assert!(load_local_image_with_permission(
-            Some(&current.to_string_lossy()),
-            "marklite:images%2F%E4%B8%AD%E6%96%87%20image%2Epng",
-            true
-        )
-        .unwrap()
-        .data_url
-        .starts_with("data:image/png;base64,"));
+        assert!(
+            load_local_image_with_permission(
+                Some(&current.to_string_lossy()),
+                &encoded_absolute,
+                true
+            )
+            .unwrap()
+            .mime
+                == "image/png"
+        );
+        assert!(
+            load_local_image_with_permission(
+                Some(&current.to_string_lossy()),
+                "marklite:images%2F%E4%B8%AD%E6%96%87%20image%2Epng",
+                true
+            )
+            .unwrap()
+            .mime
+                == "image/png"
+        );
         assert_eq!(
             load_local_image_with_permission(
                 Some(&current.to_string_lossy()),
@@ -676,7 +640,79 @@ mod tests {
                 .code,
             "UNSUPPORTED_IMAGE_TYPE"
         );
-        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn cancellation_stops_image_reads_and_releases_job_ownership() {
+        let dir = test_dir("image-cancelled");
+        let current = dir.join("index.md");
+        let image = dir.join("pixel.png");
+        fs::write(&current, "index").unwrap();
+        fs::write(&image, b"\x89PNG\r\n\x1a\nrest").unwrap();
+        let state = ImageLoadState::default();
+        let lease = state.acquire("preview-job-1").unwrap();
+        state.cancel("preview-job-1").unwrap();
+
+        let error = load_local_image_with_permission_and_cancel(
+            Some(&current.to_string_lossy()),
+            "pixel.png",
+            true,
+            Some(&lease),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "IMAGE_LOAD_CANCELLED");
+        assert_eq!(state.active_jobs(), 1);
+        drop(lease);
+        assert_eq!(state.active_jobs(), 0);
+    }
+
+    #[test]
+    fn image_job_ids_are_bounded_before_entering_the_registry() {
+        let state = ImageLoadState::default();
+        assert_eq!(
+            state.acquire("").err().map(|error| error.code).as_deref(),
+            Some("INVALID_IMAGE_JOB")
+        );
+        assert_eq!(
+            state
+                .acquire(&"x".repeat(129))
+                .err()
+                .map(|error| error.code)
+                .as_deref(),
+            Some("INVALID_IMAGE_JOB")
+        );
+        assert_eq!(state.active_jobs(), 0);
+    }
+
+    #[test]
+    fn enforces_the_actual_image_limit_when_the_file_grows_after_metadata() {
+        let dir = test_dir("image-grows-after-metadata");
+        fs::create_dir_all(&dir).unwrap();
+        let current = dir.join("current.md");
+        let image = dir.join("pixel.png");
+        fs::write(&current, "current").unwrap();
+        fs::write(&image, b"\x89PNG\r\n\x1a\nsmall").unwrap();
+        let hooked_image = crate::utils::path_utils::canonicalize_path(&image).unwrap();
+        set_image_read_hook(Some(Arc::new(move |observed| {
+            if observed == hooked_image {
+                OpenOptions::new()
+                    .write(true)
+                    .open(observed)
+                    .unwrap()
+                    .set_len(MAX_IMAGE_SIZE + 1)
+                    .unwrap();
+            }
+        })));
+
+        let result =
+            load_local_image_with_permission(Some(&current.to_string_lossy()), "pixel.png", true);
+        set_image_read_hook(None);
+
+        assert_eq!(
+            result.err().map(|error| error.code).as_deref(),
+            Some("FILE_TOO_LARGE")
+        );
     }
 
     #[test]
@@ -684,28 +720,21 @@ mod tests {
         let dir = test_dir("image-types");
         let current = dir.join("index.md");
         fs::write(&current, "index").unwrap();
-        for (name, bytes, prefix) in [
-            (
-                "photo.jpg",
-                b"\xff\xd8\xffrest".as_slice(),
-                "data:image/jpeg;base64,",
-            ),
-            (
-                "animation.gif",
-                b"GIF89arest".as_slice(),
-                "data:image/gif;base64,",
-            ),
+        for (name, bytes, mime) in [
+            ("photo.jpg", b"\xff\xd8\xffrest".as_slice(), "image/jpeg"),
+            ("animation.gif", b"GIF89arest".as_slice(), "image/gif"),
             (
                 "picture.webp",
                 b"RIFF\x04\x00\x00\x00WEBPrest".as_slice(),
-                "data:image/webp;base64,",
+                "image/webp",
             ),
         ] {
             fs::write(dir.join(name), bytes).unwrap();
             let loaded =
                 load_local_image_with_permission(Some(&current.to_string_lossy()), name, true)
                     .unwrap();
-            assert!(loaded.data_url.starts_with(prefix));
+            assert_eq!(loaded.mime, mime);
+            assert_eq!(loaded.bytes, bytes);
         }
 
         fs::write(dir.join("mismatch.png"), b"GIF89arest").unwrap();
@@ -754,6 +783,5 @@ mod tests {
             .code,
             "FILE_NOT_FOUND"
         );
-        fs::remove_dir_all(dir).unwrap();
     }
 }

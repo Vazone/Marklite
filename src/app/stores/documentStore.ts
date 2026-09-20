@@ -1,7 +1,21 @@
-import { derived, get, writable } from 'svelte/store';
-import type { DocumentDto, DocumentStats, OutlineItem, RenderedMarkdownDto } from '../../lib/tauriApi';
+import { get, writable, type Readable } from 'svelte/store';
+import {
+  EMPTY_SANITIZED_MARKDOWN_HTML,
+  type DocumentDto,
+  type DiagramDiagnostic,
+  type DiagramSource,
+  type DocumentStats,
+  type MarkdownAnalysisDto,
+  type OutlineItem,
+  type RenderedMarkdownDto,
+  type SanitizedMarkdownHtml,
+  type SourceBlock,
+  type VirtualPreviewIndex
+} from '../../lib/tauriApi';
 import type { SerializedEditorState } from '../../lib/editorSession';
-import { isSameFilePath } from '../../lib/filePathIdentity';
+import { isSameFileIdentity, isSameFilePath } from '../../lib/filePathIdentity';
+import { distinctProjection } from '../../lib/distinctProjection';
+import { t } from '../../lib/i18n';
 
 export type CursorPosition = {
   line: number;
@@ -10,6 +24,7 @@ export type CursorPosition = {
 
 export type EditorScrollPosition = {
   line: number;
+  offsetUtf16?: number;
   ratio: number;
   totalLines: number;
   scrollTop: number;
@@ -22,6 +37,8 @@ export type DocumentLoadState = 'loaded' | 'unloaded' | 'loading' | 'error';
 export type EditorTab = {
   id: string;
   path: string | null;
+  fileIdentity: string | null;
+  contentVersion: string | null;
   title: string;
   content: string;
   contentRevision: number;
@@ -34,8 +51,13 @@ export type EditorTab = {
   cursorPosition: CursorPosition;
   scrollPosition: EditorScrollPosition;
   editorState: SerializedEditorState | null;
-  html: string;
+  html: SanitizedMarkdownHtml;
+  sourceBlocks: SourceBlock[];
+  virtualPreview: VirtualPreviewIndex | null;
+  diagrams: DiagramSource[];
+  diagramDiagnostics: DiagramDiagnostic[];
   renderedRevision: number;
+  analysisRevision: number;
   outline: OutlineItem[];
   stats: DocumentStats;
 };
@@ -45,17 +67,53 @@ export type DocumentState = {
   activeTabId: string | null;
 };
 
-const welcomeContent = `# 欢迎使用 MarkLite
+export type DocumentTabDescriptor = Pick<
+  EditorTab,
+  'id' | 'path' | 'title' | 'isDirty' | 'loadState'
+>;
 
-一个使用 Rust、Tauri、Svelte 和 CodeMirror 构建的轻量 Markdown 编辑器。
+export type DocumentSessionProjection = {
+  paths: string[];
+  activePath: string | null;
+};
 
-- 作者：Vazone
-- GitHub：https://github.com/Vazone/Marklite
-- 支持实时预览
-- 支持多标签和最近文件
-- 支持设置、工具栏和常用快捷键
+export type ActiveDocumentShell = Pick<
+  EditorTab,
+  'id' | 'path' | 'title' | 'isDirty' | 'loadState' | 'loadError'
+>;
 
-> 新建、打开和保存都在顶部工具栏里。`;
+export type ActiveEditorDocument = Pick<
+  EditorTab,
+  'id' | 'content' | 'editorState' | 'scrollPosition' | 'loadState'
+>;
+
+export type ActiveRenderDocument = Pick<
+  EditorTab,
+  'id' | 'content' | 'contentRevision' | 'loadState'
+>;
+
+export type ActivePreviewDocument = Pick<
+  EditorTab,
+  'id' | 'path' | 'title' | 'html' | 'sourceBlocks' | 'virtualPreview' | 'diagrams' | 'diagramDiagnostics' | 'renderedRevision' | 'contentRevision' | 'outline' | 'loadState'
+>;
+
+export type SidebarDocumentView = Pick<
+  EditorTab,
+  | 'id'
+  | 'path'
+  | 'title'
+  | 'fileSize'
+  | 'lastSavedAt'
+  | 'cursorPosition'
+  | 'scrollPosition'
+  | 'outline'
+  | 'stats'
+>;
+
+export type StatusDocumentView = Pick<
+  EditorTab,
+  'path' | 'isDirty' | 'loadState' | 'stats' | 'cursorPosition'
+>;
 
 const emptyStats: DocumentStats = {
   wordCount: 0,
@@ -65,6 +123,12 @@ const emptyStats: DocumentStats = {
   linkCount: 0,
   imageCount: 0
 };
+
+function countUnicodeScalars(value: string): number {
+  let count = 0;
+  for (const _character of value) count += 1;
+  return count;
+}
 
 function createId(): string {
   return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -82,6 +146,8 @@ function createTab(document: CreateTabInput = {}): EditorTab {
   return {
     id: createId(),
     path: document.path ?? null,
+    fileIdentity: document.fileIdentity ?? null,
+    contentVersion: document.contentVersion ?? null,
     title: document.title ?? 'Untitled.md',
     content,
     contentRevision: 0,
@@ -94,12 +160,17 @@ function createTab(document: CreateTabInput = {}): EditorTab {
     cursorPosition: { line: 1, column: 1 },
     scrollPosition: { line: 1, ratio: 0, totalLines: 1, scrollTop: 0, scrollHeight: 0, clientHeight: 0 },
     editorState: null,
-    html: '',
+    html: EMPTY_SANITIZED_MARKDOWN_HTML,
+    sourceBlocks: [],
+    virtualPreview: null,
+    diagrams: [],
+    diagramDiagnostics: [],
     renderedRevision: -1,
+    analysisRevision: -1,
     outline: [],
     stats: {
       ...emptyStats,
-      characterCount: content.length,
+      characterCount: countUnicodeScalars(content),
       lineCount: content ? content.split('\n').length : 1
     }
   };
@@ -125,9 +196,11 @@ function hydrateTab(tab: EditorTab, document: DocumentDto): EditorTab {
   return {
     ...tab,
     path: document.path,
+    fileIdentity: document.fileIdentity,
+    contentVersion: document.contentVersion,
     title: document.title,
     content,
-    contentRevision: 0,
+    contentRevision: tab.loadState === 'loaded' ? tab.contentRevision + 1 : tab.contentRevision,
     isDirty: document.isDirty,
     isWelcome: false,
     loadState: 'loaded',
@@ -137,12 +210,17 @@ function hydrateTab(tab: EditorTab, document: DocumentDto): EditorTab {
     cursorPosition: { line: 1, column: 1 },
     scrollPosition: { line: 1, ratio: 0, totalLines: 1, scrollTop: 0, scrollHeight: 0, clientHeight: 0 },
     editorState: null,
-    html: '',
+    html: EMPTY_SANITIZED_MARKDOWN_HTML,
+    sourceBlocks: [],
+    virtualPreview: null,
+    diagrams: [],
+    diagramDiagnostics: [],
     renderedRevision: -1,
+    analysisRevision: -1,
     outline: [],
     stats: {
       ...emptyStats,
-      characterCount: content.length,
+      characterCount: countUnicodeScalars(content),
       lineCount: content ? content.split('\n').length : 1
     }
   };
@@ -151,7 +229,7 @@ function hydrateTab(tab: EditorTab, document: DocumentDto): EditorTab {
 function createWelcomeTab(): EditorTab {
   return createTab({
     title: 'Untitled.md',
-    content: welcomeContent,
+    content: t('welcome.content'),
     isDirty: false,
     isWelcome: true
   });
@@ -220,6 +298,26 @@ export function createDocumentStore() {
 
   return {
     subscribe: store.subscribe,
+    localizeWelcome() {
+      const content = t('welcome.content');
+      store.update((state) => ({
+        ...state,
+        tabs: state.tabs.map((tab) => tab.isWelcome && !tab.isDirty && tab.content !== content
+          ? {
+              ...tab,
+              content,
+              contentRevision: tab.contentRevision + 1,
+              renderedRevision: -1,
+              analysisRevision: -1,
+              stats: {
+                ...tab.stats,
+                characterCount: countUnicodeScalars(content),
+                lineCount: content.split('\n').length
+              }
+            }
+          : tab)
+      }));
+    },
     newDocument() {
       store.update((state) => {
         const replacingPlaceholder = state.tabs.length === 1 && canReplacePlaceholder(state.tabs[0]);
@@ -231,21 +329,26 @@ export function createDocumentStore() {
       });
     },
     openDocument(document: DocumentDto) {
+      let openedTab: EditorTab | undefined;
       store.update((state) => {
-        const existing = state.tabs.find((tab) =>
-          isSameFilePath(tab.path, document.path)
+        const existing = state.tabs.find(
+          (tab) =>
+            isSameFileIdentity(tab.fileIdentity, document.fileIdentity) ||
+            (tab.fileIdentity === null && isSameFilePath(tab.path, document.path))
         );
         if (existing) {
+          openedTab = existing.loadState !== 'loaded' ? hydrateTab(existing, document) : existing;
           return {
             ...state,
             tabs: state.tabs.map((tab) =>
-              tab.id === existing.id && tab.loadState !== 'loaded' ? hydrateTab(tab, document) : tab
+              tab.id === existing.id ? openedTab! : tab
             ),
             activeTabId: existing.id
           };
         }
 
         const tab = createTab(document);
+        openedTab = tab;
         if (state.tabs.length === 1 && canReplacePlaceholder(state.tabs[0])) {
           return {
             tabs: [tab],
@@ -258,12 +361,16 @@ export function createDocumentStore() {
           activeTabId: tab.id
         };
       });
+      if (!openedTab) {
+        throw new Error('Document tab creation failed');
+      }
+      return openedTab;
     },
     restoreSessionTabs(paths: string[], activePath: string | null) {
       store.update((state) => {
         const restoredTabs: EditorTab[] = [];
         for (const path of paths) {
-          if (!path.trim() || restoredTabs.some((tab) => isSameFilePath(tab.path, path))) continue;
+          if (!path || restoredTabs.some((tab) => isSameFilePath(tab.path, path))) continue;
           restoredTabs.push(createDeferredTab(path));
         }
         if (!restoredTabs.length) return state;
@@ -315,24 +422,60 @@ export function createDocumentStore() {
     },
     hydrateDocument(tabId: string, requestedPath: string, document: DocumentDto): boolean {
       let applied = false;
-      store.update((state) => ({
-        ...state,
-        tabs: state.tabs.map((tab) => {
-          if (
-            tab.id !== tabId ||
-            tab.loadState === 'loaded' ||
-            !isSameFilePath(tab.path, requestedPath) ||
-            !isSameFilePath(document.path, requestedPath)
-          ) {
-            return tab;
-          }
-          applied = true;
-          return hydrateTab(tab, document);
-        })
-      }));
+      store.update((state) => {
+        const target = state.tabs.find((tab) => tab.id === tabId);
+        if (
+          !target ||
+          target.loadState === 'loaded' ||
+          !isSameFilePath(target.path, requestedPath)
+        ) {
+          return state;
+        }
+
+        const existingOwner = state.tabs.find(
+          (tab) =>
+            tab.id !== tabId && isSameFileIdentity(tab.fileIdentity, document.fileIdentity)
+        );
+        applied = true;
+        if (existingOwner) {
+          return {
+            tabs: state.tabs.filter((tab) => tab.id !== tabId),
+            activeTabId: state.activeTabId === tabId ? existingOwner.id : state.activeTabId
+          };
+        }
+
+        return {
+          ...state,
+          tabs: state.tabs.map((tab) =>
+            tab.id === tabId ? hydrateTab(tab, document) : tab
+          )
+        };
+      });
       return applied;
     },
-    updateContent(tabId: string, content: string) {
+    reloadDocument(tabId: string, requestedPath: string, document: DocumentDto): boolean {
+      let applied = false;
+      store.update((state) => {
+        const target = state.tabs.find((tab) => tab.id === tabId);
+        if (!target || !isSameFilePath(target.path, requestedPath)) return state;
+        const existingOwner = state.tabs.find(
+          (tab) => tab.id !== tabId && isSameFileIdentity(tab.fileIdentity, document.fileIdentity)
+        );
+        applied = true;
+        if (existingOwner) {
+          return {
+            tabs: state.tabs.filter((tab) => tab.id !== tabId),
+            activeTabId: state.activeTabId === tabId ? existingOwner.id : state.activeTabId
+          };
+        }
+        return {
+          ...state,
+          tabs: state.tabs.map((tab) => (tab.id === tabId ? hydrateTab(tab, document) : tab))
+        };
+      });
+      return applied;
+    },
+    updateContent(tabId: string, content: string, lineCount?: number) {
       store.update((state) => ({
         ...state,
         tabs: state.tabs.map((tab) =>
@@ -345,13 +488,26 @@ export function createDocumentStore() {
                 isWelcome: false,
                 stats: {
                   ...tab.stats,
-                  characterCount: content.length,
-                  lineCount: content ? content.split('\n').length : 1
+                  characterCount: countUnicodeScalars(content),
+                  lineCount: lineCount ?? (content ? content.split('\n').length : 1)
                 }
               }
             : tab
         )
       }));
+    },
+    markDirty(tabId: string) {
+      store.update((state) => {
+        if (!state.tabs.some((tab) => tab.id === tabId && tab.loadState === 'loaded' && !tab.isDirty)) {
+          return state;
+        }
+        return {
+          ...state,
+          tabs: state.tabs.map((tab) =>
+            tab.id === tabId ? { ...tab, isDirty: true, isWelcome: false } : tab
+          )
+        };
+      });
     },
     updateCursor(tabId: string, cursorPosition: CursorPosition) {
       store.update((state) => ({
@@ -381,7 +537,12 @@ export function createDocumentStore() {
           return {
             ...tab,
             html: rendered.html,
+            sourceBlocks: rendered.sourceBlocks,
+            virtualPreview: rendered.virtualPreview ?? null,
+            diagrams: rendered.diagrams,
+            diagramDiagnostics: rendered.diagramDiagnostics,
             renderedRevision: contentRevision,
+            analysisRevision: contentRevision,
             outline: rendered.outline,
             stats: rendered.stats
           };
@@ -389,25 +550,63 @@ export function createDocumentStore() {
       }));
       return applied;
     },
-    markSaved(tabId: string, contentRevision: number, document: DocumentDto): boolean {
+    updateAnalysis(tabId: string, contentRevision: number, analysis: MarkdownAnalysisDto): boolean {
       let applied = false;
       store.update((state) => ({
         ...state,
         tabs: state.tabs.map((tab) => {
-          if (tab.id !== tabId || tab.loadState !== 'loaded') return tab;
+          if (tab.id !== tabId || tab.loadState !== 'loaded' || tab.contentRevision !== contentRevision) return tab;
           applied = true;
           return {
             ...tab,
-            path: document.path,
-            title: document.title,
-            isDirty: tab.contentRevision === contentRevision ? false : tab.isDirty,
-            isWelcome: false,
-            lastSavedAt: document.lastSavedAt,
-            fileSize: document.fileSize
+            analysisRevision: contentRevision,
+            outline: analysis.outline,
+            stats: analysis.stats
           };
         })
       }));
       return applied;
+    },
+    markSaved(tabId: string, contentRevision: number, document: DocumentDto): boolean {
+      let applied = false;
+      store.update((state) => {
+        const conflicts = state.tabs.some(
+          (tab) =>
+            tab.id !== tabId && isSameFileIdentity(tab.fileIdentity, document.fileIdentity)
+        );
+        if (conflicts) return state;
+
+        return {
+          ...state,
+          tabs: state.tabs.map((tab) => {
+            if (tab.id !== tabId || tab.loadState !== 'loaded') return tab;
+            applied = true;
+            return {
+              ...tab,
+              path: document.path,
+              fileIdentity: document.fileIdentity,
+              contentVersion: document.contentVersion,
+              title: document.title,
+              isDirty: tab.contentRevision === contentRevision ? false : tab.isDirty,
+              isWelcome: false,
+              lastSavedAt: document.lastSavedAt,
+              fileSize: document.fileSize
+            };
+          })
+        };
+      });
+      return applied;
+    },
+    getFileOwner(fileIdentity: string, excludingTabId?: string): EditorTab | undefined {
+      return get(store).tabs.find(
+        (tab) =>
+          tab.id !== excludingTabId && isSameFileIdentity(tab.fileIdentity, fileIdentity)
+      );
+    },
+    hasFileIdentityConflict(tabId: string, fileIdentity: string | null): boolean {
+      return get(store).tabs.some(
+        (tab) => tab.id !== tabId && isSameFileIdentity(tab.fileIdentity, fileIdentity)
+      );
     },
     getTab(tabId: string): EditorTab | undefined {
       return get(store).tabs.find((tab) => tab.id === tabId);
@@ -428,9 +627,155 @@ export function createDocumentStore() {
 
 export const documentStore = createDocumentStore();
 
-export const activeTab = derived(documentStore, ($documentStore) =>
-  $documentStore.tabs.find((tab) => tab.id === $documentStore.activeTabId) ?? $documentStore.tabs[0]
-);
+export function createDocumentProjections(store: Readable<DocumentState>) {
+  const findActive = (state: DocumentState) =>
+    state.tabs.find((tab) => tab.id === state.activeTabId) ?? state.tabs[0];
+  const activeTab = distinctProjection(
+    store,
+    findActive,
+    Object.is
+  );
+  const activeShell = projectActive(store, findActive, ({
+    id,
+    path,
+    title,
+    isDirty,
+    loadState,
+    loadError
+  }): ActiveDocumentShell => ({ id, path, title, isDirty, loadState, loadError }));
+  const activeEditor = projectActive(store, findActive, ({
+    id,
+    content,
+    editorState,
+    scrollPosition,
+    loadState
+  }): ActiveEditorDocument => ({ id, content, editorState, scrollPosition, loadState }));
+  const activeRender = projectActive(store, findActive, ({
+    id,
+    content,
+    contentRevision,
+    loadState
+  }): ActiveRenderDocument => ({ id, content, contentRevision, loadState }));
+  const activePreview = projectActive(store, findActive, ({
+    id,
+    path,
+    title,
+    html,
+    sourceBlocks,
+    virtualPreview,
+    diagrams,
+    diagramDiagnostics,
+    renderedRevision,
+    contentRevision,
+    outline,
+    loadState
+  }): ActivePreviewDocument => ({ id, path, title, html, sourceBlocks, virtualPreview, diagrams, diagramDiagnostics, renderedRevision, contentRevision, outline, loadState }));
+  const activeSidebar = projectActive(store, findActive, ({
+    id,
+    path,
+    title,
+    fileSize,
+    lastSavedAt,
+    cursorPosition,
+    scrollPosition,
+    outline,
+    stats
+  }): SidebarDocumentView => ({
+    id,
+    path,
+    title,
+    fileSize,
+    lastSavedAt,
+    cursorPosition,
+    scrollPosition,
+    outline,
+    stats
+  }));
+  const activeStatus = projectActive(store, findActive, ({
+    path,
+    isDirty,
+    loadState,
+    stats,
+    cursorPosition
+  }): StatusDocumentView => ({ path, isDirty, loadState, stats, cursorPosition }));
+  const tabBarState = distinctProjection(
+    store,
+    (state) => ({
+      activeTabId: state.activeTabId,
+      tabs: state.tabs.map(({ id, path, title, isDirty, loadState }) => ({
+        id,
+        path,
+        title,
+        isDirty,
+        loadState
+      }))
+    }),
+    (left, right) =>
+      left.activeTabId === right.activeTabId &&
+      left.tabs.length === right.tabs.length &&
+      left.tabs.every((tab, index) => {
+        const other = right.tabs[index];
+        return (
+          tab.id === other.id &&
+          tab.path === other.path &&
+          tab.title === other.title &&
+          tab.isDirty === other.isDirty &&
+          tab.loadState === other.loadState
+        );
+      })
+  );
+  const sessionProjection = distinctProjection(
+    store,
+    (state): DocumentSessionProjection => {
+      const paths = state.tabs.flatMap((tab) => (tab.path ? [tab.path] : []));
+      const activePath =
+        state.tabs.find((tab) => tab.id === state.activeTabId)?.path ?? paths[0] ?? null;
+      return { paths, activePath };
+    },
+    (left, right) =>
+      left.activePath === right.activePath &&
+      left.paths.length === right.paths.length &&
+      left.paths.every((path, index) => path === right.paths[index])
+  );
+  return {
+    activeTab,
+    activeShell,
+    activeEditor,
+    activeRender,
+    activePreview,
+    activeSidebar,
+    activeStatus,
+    tabBarState,
+    sessionProjection
+  };
+}
+
+function projectActive<Value extends Record<string, unknown>>(
+  store: Readable<DocumentState>,
+  findActive: (state: DocumentState) => EditorTab,
+  project: (tab: EditorTab) => Value
+): Readable<Value> {
+  return distinctProjection(
+    store,
+    (state) => project(findActive(state)),
+    (left, right) => {
+      const keys = Object.keys(left) as (keyof Value)[];
+      return keys.every((key) => Object.is(left[key], right[key]));
+    }
+  );
+}
+
+export const {
+  activeTab,
+  activeShell,
+  activeEditor,
+  activeRender,
+  activePreview,
+  activeSidebar,
+  activeStatus,
+  tabBarState,
+  sessionProjection
+} = createDocumentProjections(documentStore);
 
 export function getActiveTab(): EditorTab {
   return get(activeTab);

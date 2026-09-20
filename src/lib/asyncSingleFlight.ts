@@ -3,15 +3,12 @@ export type SingleFlightRun<T> = {
   promise: Promise<T>;
 };
 
-export function createAsyncSingleFlight<Key>() {
-  const inFlight = new Map<Key, Promise<unknown>>();
+export function createAsyncSingleFlight<Key, Value>() {
+  const inFlight = new Map<Key, Promise<Value>>();
 
   return {
-    has(key: Key): boolean {
-      return inFlight.has(key);
-    },
-    run<T>(key: Key, operation: () => Promise<T>): SingleFlightRun<T> {
-      const existing = inFlight.get(key) as Promise<T> | undefined;
+    run(key: Key, operation: () => Promise<Value>): SingleFlightRun<Value> {
+      const existing = inFlight.get(key);
       if (existing) {
         return { started: false, promise: existing };
       }

@@ -4,7 +4,7 @@ pub const SESSION_VERSION: u32 = 1;
 pub const MAX_SESSION_PATHS: usize = 50;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionState {
     pub version: u32,
     pub paths: Vec<String>,

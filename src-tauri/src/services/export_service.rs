@@ -1,212 +1,375 @@
-use std::{
-    collections::HashMap,
-    io::Cursor,
-    path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
-};
-
-use base64::{engine::general_purpose::STANDARD, Engine};
-use docx_rs::{
-    AbstractNumbering, BreakType, Docx, Footnote, Hyperlink, HyperlinkType, IndentLevel, Level,
-    LevelJc, LevelText, NumberFormat, Numbering, NumberingId, PageMargin, PageOrientationType,
-    Paragraph, Pic, Run, Shading, SpecialIndentType, Start, Table, TableCell, TableRow,
-};
-use html_escape::encode_text;
-use pulldown_cmark::{html, CowStr, Event, HeadingLevel, Parser, Tag};
-use url::Url;
-
+use super::export_progress::{ExportReporter, ExportStage};
+#[cfg(test)]
+use crate::models::export::ExportWarning;
 use crate::{
     models::{
         app_error::AppError,
-        export::{
-            ExportMarginPreset, ExportOrientation, ExportPaperSize, ExportRequest, ExportResult,
-            ExportWarning,
-        },
+        export::{ExportRequest, ExportResult},
     },
-    services::{markdown_service, navigation_service},
-    utils::{atomic_write::atomic_write, security::sanitize_html},
+    services::{
+        diagram_export_service::{self, DiagramExportMode, PreparedDiagrams},
+        export_core, export_docx_writer, export_html_writer,
+        export_semantic::SemanticDocument,
+        mind_map_svg,
+    },
 };
 
-const MAX_EXPORT_CONTENT_BYTES: usize = 10 * 1024 * 1024;
-const MAX_EMBEDDED_RESOURCE_BYTES: usize = 32 * 1024 * 1024;
+pub use export_core::ExportCommitPolicy;
+
+#[cfg(test)]
 const MAX_PDF_READY_TOKEN_BYTES: usize = 128;
-static RESOURCE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-const PDF_READY_SCRIPT_TEMPLATE: &str = r#"<script>
-(() => {
-  'use strict';
-  const token = __MARKLITE_PDF_READY_TOKEN__;
-  const stageTimeoutMs = 8000;
-  const completed = [];
-  let terminalSent = false;
-
-  const send = (kind, stage, code = '', imageCount = 0, imageFailed = 0) => {
-    if (terminalSent) return;
-    const endpoint = kind === 'ready'
-      ? 'marklite-export://ready'
-      : 'marklite-export://error';
-    const params = new URLSearchParams({
-      token,
-      stage,
-      code,
-      completed: completed.join(','),
-      images: String(imageCount),
-      failed: String(imageFailed)
-    });
-    window.location.href = `${endpoint}?${params.toString()}`;
-    terminalSent = true;
-  };
-
-  const stageError = (code) => Object.assign(new Error(code), { code });
-  const errorCode = (error, fallback) => error && typeof error.code === 'string'
-    ? error.code
-    : fallback;
-  const bounded = (promise, timeoutCode, failureCode = timeoutCode.replace('_TIMEOUT', '_FAILED')) => new Promise((resolve, reject) => {
-    let settled = false;
-    const timer = window.setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(stageError(timeoutCode));
-    }, stageTimeoutMs);
-    Promise.resolve(promise).then(
-      (value) => {
-        if (settled) return;
-        settled = true;
-        window.clearTimeout(timer);
-        resolve(value);
-      },
-      () => {
-        if (settled) return;
-        settled = true;
-        window.clearTimeout(timer);
-        reject(stageError(failureCode));
-      }
-    );
-  });
-
-  const waitForDom = () => document.readyState === 'loading'
-    ? new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }))
-    : Promise.resolve();
-
-  const waitForImage = (image) => {
-    if (typeof image.decode === 'function') return image.decode();
-    if (image.complete) {
-      return image.naturalWidth > 0
-        ? Promise.resolve()
-        : Promise.reject(stageError('PDF_IMAGE_DECODE_FAILED'));
-    }
-    return new Promise((resolve, reject) => {
-      image.addEventListener('load', resolve, { once: true });
-      image.addEventListener('error', () => reject(stageError('PDF_IMAGE_DECODE_FAILED')), { once: true });
-    });
-  };
-
-  (async () => {
-    try {
-      await bounded(waitForDom(), 'PDF_DOM_TIMEOUT');
-    } catch (error) {
-      send('error', 'pageLoaded', errorCode(error, 'PDF_DOM_FAILED'));
-      return;
-    }
-    completed.push('pageLoaded', 'domReady');
-
-    try {
-      await bounded(document.fonts ? document.fonts.ready : Promise.resolve(), 'PDF_FONT_TIMEOUT');
-    } catch (error) {
-      send('error', 'fontsSettled', errorCode(error, 'PDF_FONT_FAILED'));
-      return;
-    }
-    completed.push('fontsSettled');
-
-    const images = Array.from(document.images);
-    const imageResults = await Promise.all(images.map(async (image) => {
-      try {
-        await bounded(waitForImage(image), 'PDF_IMAGE_TIMEOUT', 'PDF_IMAGE_DECODE_FAILED');
-        return '';
-      } catch (error) {
-        return errorCode(error, 'PDF_IMAGE_DECODE_FAILED');
-      }
-    }));
-    const imageFailures = imageResults.filter(Boolean);
-    if (imageFailures.length > 0) {
-      const code = imageFailures.includes('PDF_IMAGE_TIMEOUT')
-        ? 'PDF_IMAGE_TIMEOUT'
-        : 'PDF_IMAGE_DECODE_FAILED';
-      send('error', 'imagesSettled', code, images.length, imageFailures.length);
-      return;
-    }
-    completed.push('imagesSettled');
-
-    try {
-      document.documentElement.getBoundingClientRect();
-      if (document.body) document.body.getBoundingClientRect();
-      window.getComputedStyle(document.documentElement).getPropertyValue('width');
-      await Promise.resolve();
-      void document.documentElement.scrollHeight;
-    } catch (_) {
-      send('error', 'layoutReady', 'PDF_LAYOUT_FAILED', images.length, 0);
-      return;
-    }
-    send('ready', 'layoutReady', '', images.length, 0);
-  })().catch(() => send('error', 'layoutReady', 'PDF_LAYOUT_FAILED'));
-})();
-</script>"#;
-
-#[derive(Debug, Clone)]
-enum SemanticNode {
-    Element {
-        tag: Tag<'static>,
-        children: Vec<SemanticNode>,
-    },
-    Event(Event<'static>),
-}
-
-struct SemanticFrame {
-    tag: Tag<'static>,
-    children: Vec<SemanticNode>,
-}
-
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct PreparedPdf {
     pub html: String,
     pub warnings: Vec<ExportWarning>,
 }
 
-#[derive(Default, Clone, Copy)]
-struct InlineStyle {
-    bold: bool,
-    italic: bool,
-    strike: bool,
-    code: bool,
-}
-
+#[cfg(test)]
 pub fn export_html(request: &ExportRequest) -> Result<ExportResult, AppError> {
-    validate_request(request)?;
-    let mut warnings = Vec::new();
-    let document = parse_document(&request.snapshot.content);
-    let body = render_html_body(&document, request, &mut warnings);
-    let html = standalone_html(request, &body, None);
-    write_export_target(request, html.as_bytes())?;
-    Ok(result(request, warnings))
+    export_html_with_policy(request, ExportCommitPolicy::Replace)
 }
 
+pub async fn export_html_with_runtime(
+    app: &tauri::AppHandle,
+    request: &ExportRequest,
+    policy: ExportCommitPolicy,
+    isolate_profile: bool,
+    reporter: &ExportReporter,
+) -> Result<ExportResult, AppError> {
+    reporter.phase(ExportStage::Parsing);
+    let document = SemanticDocument::parse(
+        &request.snapshot.content,
+        request.snapshot.source_path.as_deref(),
+    );
+    export_html_with_runtime_document(
+        app,
+        request,
+        policy,
+        isolate_profile,
+        &document,
+        || None,
+        reporter,
+    )
+    .await
+}
+
+pub(crate) async fn export_html_with_runtime_document(
+    app: &tauri::AppHandle,
+    request: &ExportRequest,
+    policy: ExportCommitPolicy,
+    isolate_profile: bool,
+    document: &SemanticDocument,
+    cancelled: impl Fn() -> Option<AppError> + Send + Sync,
+    reporter: &ExportReporter,
+) -> Result<ExportResult, AppError> {
+    reporter.phase(ExportStage::Validating);
+    let target = export_core::validate_request(request)?;
+    export_core::preflight_commit(request, policy)?;
+    reporter.phase(ExportStage::Resources);
+    if document.diagram_sources().is_empty() {
+        return export_html_from_document_controlled(
+            request,
+            policy,
+            document,
+            PreparedDiagrams::empty(),
+            || None,
+            reporter,
+        );
+    }
+    let prepared = diagram_export_service::prepare(
+        app,
+        document,
+        &target,
+        isolate_profile,
+        None,
+        &cancelled,
+        DiagramExportMode::Html,
+    )
+    .await?;
+    export_html_from_document_controlled(request, policy, document, prepared, cancelled, reporter)
+}
+
+pub(crate) fn export_html_with_document(
+    request: &ExportRequest,
+    policy: ExportCommitPolicy,
+    document: &SemanticDocument,
+    reporter: &ExportReporter,
+) -> Result<ExportResult, AppError> {
+    reporter.phase(ExportStage::Validating);
+    export_core::validate_request(request)?;
+    reporter.phase(ExportStage::Resources);
+    export_html_from_document_controlled(
+        request,
+        policy,
+        document,
+        PreparedDiagrams::empty(),
+        || None,
+        reporter,
+    )
+}
+
+#[cfg(test)]
+pub fn export_html_with_policy(
+    request: &ExportRequest,
+    policy: ExportCommitPolicy,
+) -> Result<ExportResult, AppError> {
+    export_html_with_prepared(request, policy, PreparedDiagrams::empty())
+}
+
+#[cfg(test)]
+pub(crate) fn export_html_with_prepared(
+    request: &ExportRequest,
+    policy: ExportCommitPolicy,
+    prepared: PreparedDiagrams,
+) -> Result<ExportResult, AppError> {
+    export_core::validate_request(request)?;
+    let document = SemanticDocument::parse(
+        &request.snapshot.content,
+        request.snapshot.source_path.as_deref(),
+    );
+    export_html_from_document(request, policy, &document, prepared)
+}
+
+#[cfg(test)]
+fn export_html_from_document(
+    request: &ExportRequest,
+    policy: ExportCommitPolicy,
+    document: &SemanticDocument,
+    prepared: PreparedDiagrams,
+) -> Result<ExportResult, AppError> {
+    export_html_from_document_controlled(
+        request,
+        policy,
+        document,
+        prepared,
+        || None,
+        &ExportReporter::silent(&request.snapshot.job_id, request.format),
+    )
+}
+
+fn export_html_from_document_controlled(
+    request: &ExportRequest,
+    policy: ExportCommitPolicy,
+    document: &SemanticDocument,
+    prepared: PreparedDiagrams,
+    cancelled: impl Fn() -> Option<AppError>,
+    reporter: &ExportReporter,
+) -> Result<ExportResult, AppError> {
+    reporter.phase(ExportStage::Rendering);
+    let (body, mut warnings) =
+        export_html_writer::render_body_with_diagrams(document, request, &prepared.artifacts);
+    warnings.extend(prepared.warnings);
+    let html = export_html_writer::standalone(request, &body, None);
+    if let Some(error) = cancelled() {
+        return Err(error);
+    }
+    reporter.phase(ExportStage::Committing);
+    export_core::commit(request, html.as_bytes(), policy)?;
+    reporter.phase(ExportStage::CleaningUp);
+    Ok(export_core::result(request, warnings))
+}
+
+#[cfg(test)]
 pub fn export_docx(request: &ExportRequest) -> Result<ExportResult, AppError> {
-    validate_request(request)?;
-    let document = parse_document(&request.snapshot.content);
-    let mut context = DocxContext::new(request, &document);
-    context.render_document(&document);
-    let mut bytes = Cursor::new(Vec::new());
-    context
-        .docx
-        .build()
-        .pack(&mut bytes)
-        .map_err(|error| AppError::new("DOCX_EXPORT_FAILED", format!("生成 DOCX 失败：{error}")))?;
-    write_export_target(request, bytes.get_ref())?;
-    Ok(result(request, context.warnings))
+    export_docx_with_policy(request, ExportCommitPolicy::Replace)
 }
 
+pub async fn export_docx_with_runtime(
+    app: &tauri::AppHandle,
+    request: &ExportRequest,
+    policy: ExportCommitPolicy,
+    isolate_profile: bool,
+    reporter: &ExportReporter,
+) -> Result<ExportResult, AppError> {
+    reporter.phase(ExportStage::Parsing);
+    let document = SemanticDocument::parse(
+        &request.snapshot.content,
+        request.snapshot.source_path.as_deref(),
+    );
+    export_docx_with_runtime_document(
+        app,
+        request,
+        policy,
+        isolate_profile,
+        &document,
+        || None,
+        reporter,
+    )
+    .await
+}
+
+pub(crate) async fn export_docx_with_runtime_document(
+    app: &tauri::AppHandle,
+    request: &ExportRequest,
+    policy: ExportCommitPolicy,
+    isolate_profile: bool,
+    document: &SemanticDocument,
+    cancelled: impl Fn() -> Option<AppError> + Send + Sync,
+    reporter: &ExportReporter,
+) -> Result<ExportResult, AppError> {
+    reporter.phase(ExportStage::Validating);
+    let target = export_core::validate_request(request)?;
+    export_core::preflight_commit(request, policy)?;
+    reporter.phase(ExportStage::Resources);
+    if document.diagram_sources().is_empty() {
+        return export_docx_from_document_controlled(
+            request,
+            policy,
+            document,
+            PreparedDiagrams::empty(),
+            || None,
+            reporter,
+        );
+    }
+    let prepared = diagram_export_service::prepare(
+        app,
+        document,
+        &target,
+        isolate_profile,
+        None,
+        &cancelled,
+        DiagramExportMode::Docx,
+    )
+    .await?;
+    export_docx_from_document_controlled(request, policy, document, prepared, cancelled, reporter)
+}
+
+pub(crate) fn export_docx_with_document(
+    request: &ExportRequest,
+    policy: ExportCommitPolicy,
+    document: &SemanticDocument,
+    reporter: &ExportReporter,
+) -> Result<ExportResult, AppError> {
+    reporter.phase(ExportStage::Validating);
+    export_core::validate_request(request)?;
+    reporter.phase(ExportStage::Resources);
+    export_docx_from_document_controlled(
+        request,
+        policy,
+        document,
+        PreparedDiagrams::empty(),
+        || None,
+        reporter,
+    )
+}
+
+#[cfg(test)]
+pub fn export_docx_with_policy(
+    request: &ExportRequest,
+    policy: ExportCommitPolicy,
+) -> Result<ExportResult, AppError> {
+    export_core::validate_request(request)?;
+    let document = SemanticDocument::parse(
+        &request.snapshot.content,
+        request.snapshot.source_path.as_deref(),
+    );
+    export_docx_from_document(request, policy, &document, PreparedDiagrams::empty())
+}
+
+#[cfg(test)]
+fn export_docx_from_document(
+    request: &ExportRequest,
+    policy: ExportCommitPolicy,
+    document: &SemanticDocument,
+    prepared: PreparedDiagrams,
+) -> Result<ExportResult, AppError> {
+    export_docx_from_document_controlled(
+        request,
+        policy,
+        document,
+        prepared,
+        || None,
+        &ExportReporter::silent(&request.snapshot.job_id, request.format),
+    )
+}
+
+fn export_docx_from_document_controlled(
+    request: &ExportRequest,
+    policy: ExportCommitPolicy,
+    document: &SemanticDocument,
+    prepared: PreparedDiagrams,
+    cancelled: impl Fn() -> Option<AppError>,
+    reporter: &ExportReporter,
+) -> Result<ExportResult, AppError> {
+    reporter.phase(ExportStage::Rendering);
+    let (bytes, mut warnings) =
+        export_docx_writer::render(request, document, &prepared.rasters, reporter)?;
+    warnings.extend(prepared.warnings);
+    if let Some(error) = cancelled() {
+        return Err(error);
+    }
+    reporter.phase(ExportStage::Committing);
+    export_core::commit(request, &bytes, policy)?;
+    reporter.phase(ExportStage::CleaningUp);
+    Ok(export_core::result(request, warnings))
+}
+
+#[cfg(test)]
+fn export_docx_with_prepared(
+    request: &ExportRequest,
+    prepared: PreparedDiagrams,
+) -> Result<ExportResult, AppError> {
+    export_core::validate_request(request)?;
+    let document = SemanticDocument::parse(
+        &request.snapshot.content,
+        request.snapshot.source_path.as_deref(),
+    );
+    export_docx_from_document(request, ExportCommitPolicy::Replace, &document, prepared)
+}
+
+#[cfg(test)]
+pub fn export_svg(request: &ExportRequest) -> Result<ExportResult, AppError> {
+    export_svg_reported(
+        request,
+        &ExportReporter::silent(&request.snapshot.job_id, request.format),
+    )
+}
+
+pub fn export_svg_reported(
+    request: &ExportRequest,
+    reporter: &ExportReporter,
+) -> Result<ExportResult, AppError> {
+    reporter.phase(ExportStage::Validating);
+    export_core::validate_request(request)?;
+    let svg = request.mind_map_svg.as_deref().ok_or_else(|| {
+        AppError::new("INVALID_MIND_MAP_SVG", "脑图 SVG 导出请求缺少矢量画布内容")
+    })?;
+    mind_map_svg::validate(svg)?;
+    reporter.phase(ExportStage::Committing);
+    export_core::commit(request, svg.as_bytes(), ExportCommitPolicy::Replace)?;
+    reporter.phase(ExportStage::CleaningUp);
+    Ok(export_core::result(request, Vec::new()))
+}
+
+#[cfg(test)]
 pub fn prepare_pdf(request: &ExportRequest, ready_token: &str) -> Result<PreparedPdf, AppError> {
-    validate_request(request)?;
+    prepare_pdf_with_diagrams(request, ready_token, PreparedDiagrams::empty())
+}
+
+#[cfg(test)]
+pub(crate) fn prepare_pdf_with_diagrams(
+    request: &ExportRequest,
+    ready_token: &str,
+    prepared: PreparedDiagrams,
+) -> Result<PreparedPdf, AppError> {
+    export_core::validate_request(request)?;
+    let document = SemanticDocument::parse(
+        &request.snapshot.content,
+        request.snapshot.source_path.as_deref(),
+    );
+    prepare_pdf_from_document(request, ready_token, &document, prepared)
+}
+
+#[cfg(test)]
+pub(crate) fn prepare_pdf_from_document(
+    request: &ExportRequest,
+    ready_token: &str,
+    document: &SemanticDocument,
+    prepared: PreparedDiagrams,
+) -> Result<PreparedPdf, AppError> {
+    export_core::validate_request(request)?;
     if ready_token.is_empty()
         || ready_token.len() > MAX_PDF_READY_TOKEN_BYTES
         || !ready_token
@@ -218,1029 +381,55 @@ pub fn prepare_pdf(request: &ExportRequest, ready_token: &str) -> Result<Prepare
             "PDF 导出任务缺少有效的内部就绪令牌",
         ));
     }
-    let mut warnings = Vec::new();
-    let document = parse_document(&request.snapshot.content);
-    let body = render_html_body(&document, request, &mut warnings);
+    let diagrams = if prepared.print_artifacts.is_empty() {
+        &prepared.artifacts
+    } else {
+        &prepared.print_artifacts
+    };
+    let (body, mut warnings) =
+        export_html_writer::render_body_with_diagrams(document, request, diagrams);
+    warnings.extend(prepared.warnings);
     Ok(PreparedPdf {
-        html: standalone_html(request, &body, Some(ready_token)),
+        html: export_html_writer::standalone(request, &body, Some(ready_token)),
         warnings,
     })
 }
 
-pub fn validate_request(request: &ExportRequest) -> Result<PathBuf, AppError> {
-    if request.snapshot.job_id.trim().is_empty()
-        || request.snapshot.tab_id.trim().is_empty()
-        || request
-            .snapshot
-            .job_id
-            .chars()
-            .chain(request.snapshot.tab_id.chars())
-            .any(char::is_control)
-    {
-        return Err(AppError::new(
-            "INVALID_EXPORT_REQUEST",
-            "导出任务缺少稳定的 jobId 或 tabId",
-        ));
-    }
-    if request.snapshot.content.len() > MAX_EXPORT_CONTENT_BYTES {
-        return Err(AppError::new(
-            "EXPORT_CONTENT_TOO_LARGE",
-            "导出正文超过 10 MiB",
-        ));
-    }
-    let target = PathBuf::from(&request.target_path);
-    if !target.is_absolute()
-        || !target
-            .extension()
-            .and_then(|value| value.to_str())
-            .is_some_and(|value| value.eq_ignore_ascii_case(request.format.extension()))
-    {
-        return Err(AppError::new(
-            "INVALID_EXPORT_TARGET",
-            format!(
-                "导出目标必须是绝对 .{} 文件路径",
-                request.format.extension()
-            ),
-        ));
-    }
-    if target.exists() && !target.is_file() {
-        return Err(AppError::invalid_file_target(&request.target_path));
-    }
-    Ok(target)
+pub fn validate_request(request: &ExportRequest) -> Result<std::path::PathBuf, AppError> {
+    export_core::validate_request(request)
 }
 
-pub fn commit_pdf(request: &ExportRequest, pdf_bytes: &[u8]) -> Result<ExportResult, AppError> {
-    validate_request(request)?;
-    if !pdf_bytes.starts_with(b"%PDF-") {
-        return Err(AppError::new(
-            "INVALID_PDF_OUTPUT",
-            "平台打印器没有生成有效的 PDF 文件",
-        ));
-    }
-    write_export_target(request, pdf_bytes)?;
-    Ok(result(request, Vec::new()))
-}
-
-fn result(request: &ExportRequest, warnings: Vec<ExportWarning>) -> ExportResult {
-    ExportResult {
-        job_id: request.snapshot.job_id.clone(),
-        format: request.format,
-        path: request.target_path.clone(),
-        warnings,
-    }
-}
-
-fn write_export_target(request: &ExportRequest, bytes: &[u8]) -> Result<(), AppError> {
-    let target = validate_request(request)?;
-    if let Some(parent) = target
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| AppError::file_write_failed(&request.target_path, error))?;
-    }
-    atomic_write(&target, bytes)
-        .map_err(|error| AppError::file_write_failed(&request.target_path, error))
-}
-
-fn parse_document(markdown: &str) -> Vec<SemanticNode> {
-    let mut root = Vec::new();
-    let mut stack: Vec<SemanticFrame> = Vec::new();
-    for event in Parser::new_ext(markdown, markdown_service::markdown_options()) {
-        match event.into_static() {
-            Event::Start(tag) => stack.push(SemanticFrame {
-                tag,
-                children: Vec::new(),
-            }),
-            Event::End(_) => {
-                if let Some(frame) = stack.pop() {
-                    push_node(
-                        &mut root,
-                        &mut stack,
-                        SemanticNode::Element {
-                            tag: frame.tag,
-                            children: frame.children,
-                        },
-                    );
-                }
-            }
-            event => push_node(&mut root, &mut stack, SemanticNode::Event(event)),
-        }
-    }
-    root
-}
-
-fn push_node(root: &mut Vec<SemanticNode>, stack: &mut [impl FrameChildren], node: SemanticNode) {
-    if let Some(frame) = stack.last_mut() {
-        frame.children_mut().push(node);
-    } else {
-        root.push(node);
-    }
-}
-
-trait FrameChildren {
-    fn children_mut(&mut self) -> &mut Vec<SemanticNode>;
-}
-
-impl FrameChildren for SemanticFrame {
-    fn children_mut(&mut self) -> &mut Vec<SemanticNode> {
-        &mut self.children
-    }
-}
-
-fn render_html_body(
-    document: &[SemanticNode],
+pub fn preflight_commit(
     request: &ExportRequest,
-    warnings: &mut Vec<ExportWarning>,
-) -> String {
-    let token = format!(
-        "{}-{}-{}",
-        std::process::id(),
-        RESOURCE_SEQUENCE.fetch_add(1, Ordering::Relaxed),
-        request.snapshot.content_revision
-    );
-    let mut events = Vec::new();
-    let mut replacements = Vec::new();
-    let mut embedded_resource_bytes = 0;
-    emit_html_nodes(
-        document,
-        request,
-        warnings,
-        &token,
-        &mut replacements,
-        &mut embedded_resource_bytes,
-        &mut events,
-    );
-    let mut raw = String::new();
-    html::push_html(&mut raw, events.into_iter());
-    let mut cleaned = sanitize_html(&raw);
-    for (placeholder, data_url) in replacements {
-        cleaned = cleaned.replace(&placeholder, &data_url);
-    }
-    cleaned
-}
-
-fn emit_html_nodes(
-    nodes: &[SemanticNode],
-    request: &ExportRequest,
-    warnings: &mut Vec<ExportWarning>,
-    token: &str,
-    replacements: &mut Vec<(String, String)>,
-    embedded_resource_bytes: &mut usize,
-    events: &mut Vec<Event<'static>>,
-) {
-    for node in nodes {
-        match node {
-            SemanticNode::Element { tag, children } => match tag {
-                Tag::Image {
-                    link_type,
-                    dest_url,
-                    title,
-                    id,
-                } => {
-                    if let Some(data_url) =
-                        resolve_html_image(request, dest_url, warnings, embedded_resource_bytes)
-                    {
-                        let placeholder = format!(
-                            "https://marklite.invalid/_export-resource/{token}/{}",
-                            replacements.len()
-                        );
-                        replacements.push((placeholder.clone(), data_url));
-                        events.push(Event::Start(Tag::Image {
-                            link_type: *link_type,
-                            dest_url: CowStr::Boxed(placeholder.into_boxed_str()),
-                            title: title.clone(),
-                            id: id.clone(),
-                        }));
-                        emit_html_nodes(
-                            children,
-                            request,
-                            warnings,
-                            token,
-                            replacements,
-                            embedded_resource_bytes,
-                            events,
-                        );
-                        events.push(Event::End(tag.to_end()));
-                    } else {
-                        emit_html_nodes(
-                            children,
-                            request,
-                            warnings,
-                            token,
-                            replacements,
-                            embedded_resource_bytes,
-                            events,
-                        );
-                    }
-                }
-                Tag::Link { dest_url, .. } if !safe_hyperlink(dest_url) => {
-                    warnings.push(ExportWarning::new(
-                        "UNSAFE_LINK_SKIPPED",
-                        "已移除不安全链接，保留显示文本",
-                        Some(dest_url.to_string()),
-                    ));
-                    emit_html_nodes(
-                        children,
-                        request,
-                        warnings,
-                        token,
-                        replacements,
-                        embedded_resource_bytes,
-                        events,
-                    );
-                }
-                _ => {
-                    events.push(Event::Start(tag.clone()));
-                    emit_html_nodes(
-                        children,
-                        request,
-                        warnings,
-                        token,
-                        replacements,
-                        embedded_resource_bytes,
-                        events,
-                    );
-                    events.push(Event::End(tag.to_end()));
-                }
-            },
-            SemanticNode::Event(event) => events.push(event.clone()),
-        }
-    }
-}
-
-fn resolve_html_image(
-    request: &ExportRequest,
-    target: &str,
-    warnings: &mut Vec<ExportWarning>,
-    embedded_resource_bytes: &mut usize,
-) -> Option<String> {
-    if is_remote_target(target) {
-        warnings.push(ExportWarning::new(
-            "REMOTE_IMAGE_SKIPPED",
-            "导出不会下载远程图片，已保留替代文本",
-            Some(target.to_string()),
-        ));
-        return None;
-    }
-    if !request.options.include_local_images {
-        warnings.push(ExportWarning::new(
-            "LOCAL_IMAGE_NOT_EMBEDDED",
-            "未选择嵌入本地图片，已保留替代文本",
-            Some(target.to_string()),
-        ));
-        return None;
-    }
-    match navigation_service::load_local_image_for_export(
-        request.snapshot.source_path.as_deref(),
-        target,
-    ) {
-        Ok(image) => {
-            if !reserve_export_resource(
-                embedded_resource_bytes,
-                image.bytes.len(),
-                warnings,
-                target,
-            ) {
-                return None;
-            }
-            Some(format!(
-                "data:{};base64,{}",
-                image.mime,
-                STANDARD.encode(image.bytes)
-            ))
-        }
-        Err(error) => {
-            warnings.push(ExportWarning::new(
-                error.code,
-                error.message,
-                Some(target.to_string()),
-            ));
-            None
-        }
-    }
-}
-
-fn reserve_export_resource(
-    embedded_resource_bytes: &mut usize,
-    resource_bytes: usize,
-    warnings: &mut Vec<ExportWarning>,
-    target: &str,
-) -> bool {
-    let Some(total) = embedded_resource_bytes.checked_add(resource_bytes) else {
-        warnings.push(ExportWarning::new(
-            "EXPORT_RESOURCE_BUDGET_EXCEEDED",
-            "嵌入图片总大小超过 32 MiB，已保留替代文本",
-            Some(target.to_string()),
-        ));
-        return false;
-    };
-    if total > MAX_EMBEDDED_RESOURCE_BYTES {
-        warnings.push(ExportWarning::new(
-            "EXPORT_RESOURCE_BUDGET_EXCEEDED",
-            "嵌入图片总大小超过 32 MiB，已保留替代文本",
-            Some(target.to_string()),
-        ));
-        return false;
-    }
-    *embedded_resource_bytes = total;
-    true
-}
-
-fn standalone_html(request: &ExportRequest, body: &str, pdf_ready_token: Option<&str>) -> String {
-    let safe_title = encode_text(&request.snapshot.title);
-    let document_title = if request.options.include_title {
-        format!(r#"<h1 class="document-title">{safe_title}</h1>"#)
-    } else {
-        String::new()
-    };
-    let (page_width, page_height) = match request.options.paper_size {
-        ExportPaperSize::A4 => ("210mm", "297mm"),
-        ExportPaperSize::Letter => ("8.5in", "11in"),
-    };
-    let (page_width, page_height) = match request.options.orientation {
-        ExportOrientation::Portrait => (page_width, page_height),
-        ExportOrientation::Landscape => (page_height, page_width),
-    };
-    let margin = match request.options.margin {
-        ExportMarginPreset::Narrow => "12.7mm",
-        ExportMarginPreset::Normal => "25.4mm",
-        ExportMarginPreset::Wide => "38.1mm",
-    };
-    let ready_script = pdf_ready_token
-        .map(|token| {
-            PDF_READY_SCRIPT_TEMPLATE.replace(
-                "__MARKLITE_PDF_READY_TOKEN__",
-                &serde_json::to_string(token)
-                    .expect("serializing an internal PDF ready token cannot fail"),
-            )
-        })
-        .unwrap_or_default();
-    format!(
-        r#"<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{safe_title}</title>
-  <style>
-    @page {{ size: {page_width} {page_height}; margin: {margin}; }}
-    * {{ box-sizing: border-box; }}
-    body {{ margin: 0; color: #1f2328; background: #fff; font: 16px/1.7 "Segoe UI", "PingFang SC", system-ui, sans-serif; overflow-wrap: anywhere; }}
-    main {{ max-width: 860px; margin: 0 auto; padding: 48px 28px; }}
-    .document-title {{ margin-top: 0; padding-bottom: .35em; border-bottom: 1px solid #d0d7de; }}
-    h1, h2, h3, h4, h5, h6 {{ break-after: avoid; line-height: 1.3; }}
-    pre {{ overflow: auto; padding: 16px; border-radius: 8px; background: #f6f8fa; white-space: pre-wrap; }}
-    code {{ font-family: "Cascadia Code", Consolas, monospace; }}
-    table {{ border-collapse: collapse; width: 100%; break-inside: avoid; }}
-    th, td {{ border: 1px solid #d0d7de; padding: 8px 10px; }}
-    blockquote {{ margin-left: 0; padding-left: 16px; color: #57606a; border-left: 4px solid #d0d7de; }}
-    img {{ max-width: 100%; height: auto; }}
-    a {{ color: #0969da; }}
-    @media print {{ main {{ max-width: none; padding: 0; }} }}
-  </style>
-</head>
-<body><main>{document_title}{body}</main>{ready_script}</body>
-</html>"#
-    )
-}
-
-fn safe_hyperlink(target: &str) -> bool {
-    if target.starts_with('#') {
-        return true;
-    }
-    if target.chars().any(char::is_control) || target.trim().is_empty() {
-        return false;
-    }
-    match Url::parse(target) {
-        Ok(url) => matches!(url.scheme(), "http" | "https" | "file"),
-        Err(_) => !target.contains(':') || is_windows_absolute(target),
-    }
-}
-
-fn is_remote_target(target: &str) -> bool {
-    Url::parse(target)
-        .ok()
-        .is_some_and(|url| matches!(url.scheme(), "http" | "https"))
-}
-
-fn is_windows_absolute(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && matches!(bytes[2], b'/' | b'\\')
-}
-
-struct DocxContext<'a> {
-    request: &'a ExportRequest,
-    docx: Docx,
-    warnings: Vec<ExportWarning>,
-    footnotes: HashMap<String, Vec<SemanticNode>>,
-    next_bookmark_id: usize,
-    embedded_resource_bytes: usize,
-}
-
-impl<'a> DocxContext<'a> {
-    fn new(request: &'a ExportRequest, document: &[SemanticNode]) -> Self {
-        let mut footnotes = HashMap::new();
-        collect_footnotes(document, &mut footnotes);
-        let (width, height) = match request.options.paper_size {
-            ExportPaperSize::A4 => (11906, 16838),
-            ExportPaperSize::Letter => (12240, 15840),
-        };
-        let (width, height) = match request.options.orientation {
-            ExportOrientation::Portrait => (width, height),
-            ExportOrientation::Landscape => (height, width),
-        };
-        let margin = match request.options.margin {
-            ExportMarginPreset::Narrow => 720,
-            ExportMarginPreset::Normal => 1440,
-            ExportMarginPreset::Wide => 2160,
-        };
-        let orientation = match request.options.orientation {
-            ExportOrientation::Portrait => PageOrientationType::Portrait,
-            ExportOrientation::Landscape => PageOrientationType::Landscape,
-        };
-        let docx = add_numbering_definitions(
-            Docx::new()
-                .page_size(width, height)
-                .page_orient(orientation)
-                .page_margin(PageMargin {
-                    top: margin,
-                    left: margin,
-                    bottom: margin,
-                    right: margin,
-                    header: 720,
-                    footer: 720,
-                    gutter: 0,
-                }),
-        );
-        Self {
-            request,
-            docx,
-            warnings: Vec::new(),
-            footnotes,
-            next_bookmark_id: 1,
-            embedded_resource_bytes: 0,
-        }
-    }
-
-    fn render_document(&mut self, nodes: &[SemanticNode]) {
-        if self.request.options.include_title {
-            let paragraph = Paragraph::new()
-                .style("Title")
-                .add_run(Run::new().add_text(&self.request.snapshot.title));
-            self.push_paragraph(paragraph);
-        }
-        self.render_blocks(nodes, 0, None);
-    }
-
-    fn render_blocks(
-        &mut self,
-        nodes: &[SemanticNode],
-        quote_depth: usize,
-        numbering: Option<(usize, usize)>,
-    ) {
-        for node in nodes {
-            match node {
-                SemanticNode::Element { tag, children } => match tag {
-                    Tag::Paragraph => {
-                        let mut paragraph = self.inline_paragraph(children, InlineStyle::default());
-                        if quote_depth > 0 {
-                            paragraph =
-                                paragraph.indent(Some(720 * quote_depth as i32), None, None, None);
-                        }
-                        if let Some((id, level)) = numbering {
-                            paragraph =
-                                paragraph.numbering(NumberingId::new(id), IndentLevel::new(level));
-                        }
-                        self.push_paragraph(paragraph);
-                    }
-                    Tag::Heading { level, id, .. } => {
-                        let mut paragraph = self
-                            .inline_paragraph(children, InlineStyle::default())
-                            .style(heading_style(*level))
-                            .keep_next(true);
-                        if let Some(name) = id.as_ref().filter(|value| !value.is_empty()) {
-                            let bookmark_id = self.next_bookmark_id;
-                            self.next_bookmark_id += 1;
-                            paragraph = paragraph
-                                .add_bookmark_start(bookmark_id, bookmark_name(name))
-                                .add_bookmark_end(bookmark_id);
-                        }
-                        self.push_paragraph(paragraph);
-                    }
-                    Tag::BlockQuote(_) => self.render_blocks(children, quote_depth + 1, numbering),
-                    Tag::CodeBlock(_) => {
-                        let text = plain_text(children);
-                        let paragraph = Paragraph::new().add_run(
-                            Run::new()
-                                .add_text(text)
-                                .fonts(docx_rs::RunFonts::new().ascii("Consolas"))
-                                .shading(Shading::new().fill("F6F8FA")),
-                        );
-                        self.push_paragraph(paragraph);
-                    }
-                    Tag::List(start) => self.render_list(children, quote_depth, 0, start.is_some()),
-                    Tag::Table(_) => self.render_table(children),
-                    Tag::FootnoteDefinition(_) => {}
-                    Tag::HtmlBlock => {
-                        self.warnings.push(ExportWarning::new(
-                            "RAW_HTML_DEGRADED",
-                            "DOCX 不执行原始 HTML，已按纯文本导出",
-                            None,
-                        ));
-                        self.push_paragraph(
-                            Paragraph::new().add_run(Run::new().add_text(plain_text(children))),
-                        );
-                    }
-                    Tag::Item | Tag::TableHead | Tag::TableRow | Tag::TableCell => {
-                        self.render_blocks(children, quote_depth, numbering)
-                    }
-                    _ => {
-                        let paragraph = self.inline_paragraph(children, InlineStyle::default());
-                        self.push_paragraph(paragraph);
-                    }
-                },
-                SemanticNode::Event(Event::Rule) => self.push_paragraph(
-                    Paragraph::new().add_run(Run::new().add_text("────────────────────────")),
-                ),
-                SemanticNode::Event(Event::Html(value) | Event::InlineHtml(value)) => {
-                    self.warnings.push(ExportWarning::new(
-                        "RAW_HTML_DEGRADED",
-                        "DOCX 不执行原始 HTML，已按纯文本导出",
-                        None,
-                    ));
-                    self.push_paragraph(
-                        Paragraph::new().add_run(Run::new().add_text(value.as_ref())),
-                    );
-                }
-                SemanticNode::Event(event) => {
-                    let text = event_text(event);
-                    if !text.is_empty() {
-                        self.push_paragraph(Paragraph::new().add_run(Run::new().add_text(text)));
-                    }
-                }
-            }
-        }
-    }
-
-    fn render_list(
-        &mut self,
-        nodes: &[SemanticNode],
-        quote_depth: usize,
-        level: usize,
-        ordered: bool,
-    ) {
-        for node in nodes {
-            let SemanticNode::Element {
-                tag: Tag::Item,
-                children,
-            } = node
-            else {
-                continue;
-            };
-            let numbering_id = if ordered { 2 } else { 3 };
-            let mut rendered_primary = false;
-            for child in children {
-                match child {
-                    SemanticNode::Element {
-                        tag: Tag::List(start),
-                        children,
-                    } => {
-                        self.render_list(children, quote_depth, level + 1, start.is_some());
-                    }
-                    SemanticNode::Element {
-                        tag: Tag::Paragraph,
-                        children,
-                    } if !rendered_primary => {
-                        rendered_primary = true;
-                        let mut paragraph = self.inline_paragraph(children, InlineStyle::default());
-                        if quote_depth > 0 {
-                            paragraph =
-                                paragraph.indent(Some(720 * quote_depth as i32), None, None, None);
-                        }
-                        paragraph = paragraph
-                            .numbering(NumberingId::new(numbering_id), IndentLevel::new(level));
-                        self.push_paragraph(paragraph);
-                    }
-                    other if !rendered_primary => {
-                        rendered_primary = true;
-                        let paragraph = self
-                            .inline_paragraph(std::slice::from_ref(other), InlineStyle::default())
-                            .numbering(NumberingId::new(numbering_id), IndentLevel::new(level));
-                        self.push_paragraph(paragraph);
-                    }
-                    SemanticNode::Element { children, .. } => {
-                        self.render_blocks(children, quote_depth, None)
-                    }
-                    _ => {}
-                }
-            }
-            if !rendered_primary {
-                self.push_paragraph(
-                    Paragraph::new()
-                        .numbering(NumberingId::new(numbering_id), IndentLevel::new(level)),
-                );
-            }
-        }
-    }
-
-    fn render_table(&mut self, nodes: &[SemanticNode]) {
-        let mut rows = Vec::new();
-        collect_table_rows(nodes, &mut rows);
-        if rows.is_empty() {
-            return;
-        }
-        let rows = rows
-            .into_iter()
-            .map(|cells| {
-                TableRow::new(
-                    cells
-                        .into_iter()
-                        .map(|cell| {
-                            TableCell::new()
-                                .add_paragraph(self.inline_paragraph(cell, InlineStyle::default()))
-                        })
-                        .collect(),
-                )
-            })
-            .collect();
-        self.docx = std::mem::take(&mut self.docx).add_table(Table::new(rows));
-    }
-
-    fn inline_paragraph(&mut self, nodes: &[SemanticNode], style: InlineStyle) -> Paragraph {
-        let mut paragraph = Paragraph::new();
-        for node in nodes {
-            paragraph = self.add_inline(paragraph, node, style);
-        }
-        paragraph
-    }
-
-    fn add_inline(
-        &mut self,
-        paragraph: Paragraph,
-        node: &SemanticNode,
-        style: InlineStyle,
-    ) -> Paragraph {
-        match node {
-            SemanticNode::Element { tag, children } => match tag {
-                Tag::Strong => self.add_inline_children(
-                    paragraph,
-                    children,
-                    InlineStyle {
-                        bold: true,
-                        ..style
-                    },
-                ),
-                Tag::Emphasis => self.add_inline_children(
-                    paragraph,
-                    children,
-                    InlineStyle {
-                        italic: true,
-                        ..style
-                    },
-                ),
-                Tag::Strikethrough => self.add_inline_children(
-                    paragraph,
-                    children,
-                    InlineStyle {
-                        strike: true,
-                        ..style
-                    },
-                ),
-                Tag::Link { dest_url, .. } => {
-                    let label = plain_text(children);
-                    if safe_hyperlink(dest_url) {
-                        let kind = if dest_url.starts_with('#') {
-                            HyperlinkType::Anchor
-                        } else {
-                            HyperlinkType::External
-                        };
-                        let value = dest_url.strip_prefix('#').unwrap_or(dest_url);
-                        let run = styled_run(Run::new().add_text(label), style)
-                            .color("0969DA")
-                            .underline("single");
-                        paragraph.add_hyperlink(Hyperlink::new(value, kind).add_run(run))
-                    } else {
-                        self.warnings.push(ExportWarning::new(
-                            "UNSAFE_LINK_SKIPPED",
-                            "已移除不安全链接，保留显示文本",
-                            Some(dest_url.to_string()),
-                        ));
-                        paragraph.add_run(styled_run(Run::new().add_text(label), style))
-                    }
-                }
-                Tag::Image { dest_url, .. } => {
-                    let alt = plain_text(children);
-                    if !self.request.options.include_local_images {
-                        self.warnings.push(ExportWarning::new(
-                            "LOCAL_IMAGE_NOT_EMBEDDED",
-                            "未选择嵌入本地图片，已保留替代文本",
-                            Some(dest_url.to_string()),
-                        ));
-                        return paragraph.add_run(styled_run(Run::new().add_text(alt), style));
-                    }
-                    if is_remote_target(dest_url) {
-                        self.warnings.push(ExportWarning::new(
-                            "REMOTE_IMAGE_SKIPPED",
-                            "导出不会下载远程图片，已保留替代文本",
-                            Some(dest_url.to_string()),
-                        ));
-                        return paragraph.add_run(styled_run(Run::new().add_text(alt), style));
-                    }
-                    match navigation_service::load_local_image_for_export(
-                        self.request.snapshot.source_path.as_deref(),
-                        dest_url,
-                    ) {
-                        Ok(image) if matches!(image.mime, "image/png" | "image/jpeg") => {
-                            if reserve_export_resource(
-                                &mut self.embedded_resource_bytes,
-                                image.bytes.len(),
-                                &mut self.warnings,
-                                dest_url,
-                            ) {
-                                paragraph.add_run(Run::new().add_image(Pic::new(&image.bytes)))
-                            } else {
-                                paragraph.add_run(styled_run(Run::new().add_text(alt), style))
-                            }
-                        }
-                        Ok(image) => {
-                            self.warnings.push(ExportWarning::new(
-                                "DOCX_IMAGE_FORMAT_DEGRADED",
-                                "DOCX 当前只嵌入 PNG/JPEG；GIF/WebP 已保留替代文本",
-                                Some(image.path),
-                            ));
-                            paragraph.add_run(styled_run(Run::new().add_text(alt), style))
-                        }
-                        Err(error) => {
-                            self.warnings.push(ExportWarning::new(
-                                error.code,
-                                error.message,
-                                Some(dest_url.to_string()),
-                            ));
-                            paragraph.add_run(styled_run(Run::new().add_text(alt), style))
-                        }
-                    }
-                }
-                _ => self.add_inline_children(paragraph, children, style),
-            },
-            SemanticNode::Event(Event::Text(value)) => {
-                paragraph.add_run(styled_run(Run::new().add_text(value.as_ref()), style))
-            }
-            SemanticNode::Event(Event::Code(value)) => paragraph.add_run(styled_run(
-                Run::new()
-                    .add_text(value.as_ref())
-                    .fonts(docx_rs::RunFonts::new().ascii("Consolas"))
-                    .shading(Shading::new().fill("F6F8FA")),
-                InlineStyle {
-                    code: true,
-                    ..style
-                },
-            )),
-            SemanticNode::Event(Event::SoftBreak | Event::HardBreak) => {
-                paragraph.add_run(Run::new().add_break(BreakType::TextWrapping))
-            }
-            SemanticNode::Event(Event::TaskListMarker(done)) => {
-                paragraph.add_run(Run::new().add_text(if *done { "☒ " } else { "☐ " }))
-            }
-            SemanticNode::Event(Event::FootnoteReference(label)) => {
-                if let Some(nodes) = self.footnotes.get(label.as_ref()).cloned() {
-                    let content = plain_text(&nodes);
-                    let footnote = Footnote::new()
-                        .add_content(Paragraph::new().add_run(Run::new().add_text(content)));
-                    paragraph.add_run(Run::new().add_footnote_reference(footnote))
-                } else {
-                    self.warnings.push(ExportWarning::new(
-                        "MISSING_FOOTNOTE_DEFINITION",
-                        "脚注引用没有对应定义，已按文本导出",
-                        Some(label.to_string()),
-                    ));
-                    paragraph.add_run(Run::new().add_text(format!("[^{label}]")))
-                }
-            }
-            SemanticNode::Event(Event::InlineMath(value) | Event::DisplayMath(value)) => {
-                self.warnings.push(ExportWarning::new(
-                    "MATH_DEGRADED",
-                    "数学内容已按纯文本导出",
-                    None,
-                ));
-                paragraph.add_run(styled_run(Run::new().add_text(value.as_ref()), style))
-            }
-            SemanticNode::Event(Event::Html(value) | Event::InlineHtml(value)) => {
-                self.warnings.push(ExportWarning::new(
-                    "RAW_HTML_DEGRADED",
-                    "DOCX 不执行原始 HTML，已按纯文本导出",
-                    None,
-                ));
-                paragraph.add_run(styled_run(Run::new().add_text(value.as_ref()), style))
-            }
-            SemanticNode::Event(Event::Rule) => paragraph.add_run(Run::new().add_text("────────")),
-            SemanticNode::Event(Event::Start(_) | Event::End(_)) => paragraph,
-        }
-    }
-
-    fn add_inline_children(
-        &mut self,
-        mut paragraph: Paragraph,
-        nodes: &[SemanticNode],
-        style: InlineStyle,
-    ) -> Paragraph {
-        for node in nodes {
-            paragraph = self.add_inline(paragraph, node, style);
-        }
-        paragraph
-    }
-
-    fn push_paragraph(&mut self, paragraph: Paragraph) {
-        self.docx = std::mem::take(&mut self.docx).add_paragraph(paragraph);
-    }
-}
-
-fn styled_run(mut run: Run, style: InlineStyle) -> Run {
-    if style.bold {
-        run = run.bold();
-    }
-    if style.italic {
-        run = run.italic();
-    }
-    if style.strike {
-        run = run.strike();
-    }
-    if style.code {
-        run = run.fonts(docx_rs::RunFonts::new().ascii("Consolas"));
-    }
-    run
-}
-
-fn heading_style(level: HeadingLevel) -> &'static str {
-    match level {
-        HeadingLevel::H1 => "Heading1",
-        HeadingLevel::H2 => "Heading2",
-        HeadingLevel::H3 => "Heading3",
-        HeadingLevel::H4 => "Heading4",
-        HeadingLevel::H5 => "Heading5",
-        HeadingLevel::H6 => "Heading6",
-    }
-}
-
-fn bookmark_name(value: &str) -> String {
-    let mut result = value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '_' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if result.is_empty() || !result.starts_with(|character: char| character.is_ascii_alphabetic()) {
-        result.insert_str(0, "marklite_");
-    }
-    result.truncate(40);
-    result
-}
-
-fn add_numbering_definitions(mut docx: Docx) -> Docx {
-    let mut ordered = AbstractNumbering::new(2);
-    let mut bullets = AbstractNumbering::new(3);
-    for level in 0..=8 {
-        ordered = ordered.add_level(
-            Level::new(
-                level,
-                Start::new(1),
-                NumberFormat::new("decimal"),
-                LevelText::new(format!("%{}.", level + 1)),
-                LevelJc::new("left"),
-            )
-            .indent(
-                Some((720 + level * 360) as i32),
-                Some(SpecialIndentType::Hanging(360)),
-                None,
-                None,
-            ),
-        );
-        bullets = bullets.add_level(
-            Level::new(
-                level,
-                Start::new(1),
-                NumberFormat::new("bullet"),
-                LevelText::new("•"),
-                LevelJc::new("left"),
-            )
-            .indent(
-                Some((720 + level * 360) as i32),
-                Some(SpecialIndentType::Hanging(360)),
-                None,
-                None,
-            ),
-        );
-    }
-    docx = docx
-        .add_abstract_numbering(ordered)
-        .add_numbering(Numbering::new(2, 2))
-        .add_abstract_numbering(bullets)
-        .add_numbering(Numbering::new(3, 3));
-    docx
-}
-
-fn collect_footnotes(nodes: &[SemanticNode], footnotes: &mut HashMap<String, Vec<SemanticNode>>) {
-    for node in nodes {
-        if let SemanticNode::Element { tag, children } = node {
-            if let Tag::FootnoteDefinition(label) = tag {
-                footnotes.insert(label.to_string(), children.clone());
-            } else {
-                collect_footnotes(children, footnotes);
-            }
-        }
-    }
-}
-
-fn collect_table_rows<'a>(nodes: &'a [SemanticNode], rows: &mut Vec<Vec<&'a [SemanticNode]>>) {
-    for node in nodes {
-        if let SemanticNode::Element { tag, children } = node {
-            match tag {
-                Tag::TableHead | Tag::TableRow => {
-                    let cells = children
-                        .iter()
-                        .filter_map(|child| match child {
-                            SemanticNode::Element {
-                                tag: Tag::TableCell,
-                                children,
-                            } => Some(children.as_slice()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>();
-                    if !cells.is_empty() {
-                        rows.push(cells);
-                    }
-                }
-                _ => collect_table_rows(children, rows),
-            }
-        }
-    }
-}
-
-fn plain_text(nodes: &[SemanticNode]) -> String {
-    let mut text = String::new();
-    for node in nodes {
-        match node {
-            SemanticNode::Element { children, .. } => text.push_str(&plain_text(children)),
-            SemanticNode::Event(event) => text.push_str(&event_text(event)),
-        }
-    }
-    text
-}
-
-fn event_text(event: &Event<'_>) -> String {
-    match event {
-        Event::Text(value)
-        | Event::Code(value)
-        | Event::InlineMath(value)
-        | Event::DisplayMath(value)
-        | Event::Html(value)
-        | Event::InlineHtml(value) => value.to_string(),
-        Event::FootnoteReference(value) => format!("[^{value}]"),
-        Event::SoftBreak | Event::HardBreak => "\n".to_string(),
-        Event::Rule => "────────────────".to_string(),
-        Event::TaskListMarker(done) => {
-            if *done {
-                "☒ ".to_string()
-            } else {
-                "☐ ".to_string()
-            }
-        }
-        Event::Start(_) | Event::End(_) => String::new(),
-    }
+    policy: ExportCommitPolicy,
+) -> Result<(), AppError> {
+    export_core::preflight_commit(request, policy)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        path::{Path, PathBuf},
-        sync::atomic::{AtomicU64, Ordering},
-    };
+    use std::{fs, io::Read, path::Path};
 
     use base64::{engine::general_purpose::STANDARD, Engine};
-    use docx_rs::read_docx;
+    use docx_rs::{read_docx, Pic};
 
     use super::{
-        commit_pdf, export_docx, export_html, prepare_pdf, reserve_export_resource,
-        validate_request, MAX_EMBEDDED_RESOURCE_BYTES,
+        export_docx, export_docx_with_prepared, export_html, export_html_with_prepared, export_svg,
+        prepare_pdf, prepare_pdf_with_diagrams, validate_request,
     };
+    use crate::services::export_docx_writer::{fit_docx_picture_to_content_width, DocxPageLayout};
+    use crate::utils::test_support::TestPath;
+    use crate::{
+        models::diagram::RenderedDiagram,
+        services::{
+            diagram_export_service::{PreparedDiagrams, RasterDiagram},
+            export_semantic::SemanticDocument,
+        },
+    };
+    use std::collections::HashMap;
 
-    static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-    fn unique_path(extension: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "marklite-export-test-{}-{}.{}",
-            std::process::id(),
-            TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed),
-            extension
-        ))
+    fn unique_path(extension: &str) -> TestPath {
+        TestPath::new("export-service", format!("output.{extension}"))
     }
     use crate::models::export::{
         ExportFormat, ExportMarginPreset, ExportOptions, ExportOrientation, ExportPaperSize,
@@ -1258,6 +447,7 @@ mod tests {
                 content: content.to_string(),
             },
             target_path: path.to_string_lossy().to_string(),
+            target_kind: Default::default(),
             format,
             options: ExportOptions {
                 paper_size: ExportPaperSize::A4,
@@ -1266,7 +456,186 @@ mod tests {
                 include_title: true,
                 include_local_images: false,
             },
+            mind_map_svg: None,
         }
+    }
+
+    #[test]
+    fn validated_diagram_is_shared_by_html_and_pdf_and_missing_artifact_keeps_source() {
+        let markdown = "Before\n\n```mermaid\nflowchart TD\nA-->B\n```\n\nAfter";
+        let html_path = unique_path("html");
+        let html_request = request(ExportFormat::Html, &html_path, markdown);
+        let source = SemanticDocument::parse(markdown, None)
+            .diagram_sources()
+            .remove(0);
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 50\"><text>GraphReady</text></svg>";
+        let artifact = RenderedDiagram {
+            diagram_id: source.diagram_id.clone(),
+            source_sha256: source.source_sha256,
+            cache_key: "a".repeat(64),
+            renderer_id: "mermaid-offline-11.17.2".into(),
+            svg_utf8: svg.into(),
+            width: 100.0,
+            height: 50.0,
+            view_box: [0.0, 0.0, 100.0, 50.0],
+            accessible_title: Some("GraphReady".into()),
+            accessible_description: None,
+            warnings: Vec::new(),
+        };
+        let diagrams = || PreparedDiagrams {
+            artifacts: HashMap::from([(artifact.diagram_id.clone(), artifact.clone())]),
+            print_artifacts: HashMap::new(),
+            rasters: HashMap::new(),
+            warnings: Vec::new(),
+        };
+        export_html_with_prepared(
+            &html_request,
+            super::ExportCommitPolicy::Replace,
+            diagrams(),
+        )
+        .unwrap();
+        let html = fs::read_to_string(&html_path).unwrap();
+        assert!(html.contains("<svg ") && html.contains("GraphReady"));
+        assert!(!html.contains("A--&gt;B"));
+        assert!(html.contains("script-src 'none'"));
+
+        let pdf_request = request(ExportFormat::Pdf, &unique_path("pdf"), markdown);
+        let pdf = prepare_pdf_with_diagrams(&pdf_request, "diagram-ready", diagrams()).unwrap();
+        assert!(pdf.html.contains(svg));
+        assert!(pdf.html.contains("marklite-export"));
+        let fallback = prepare_pdf(&pdf_request, "diagram-fallback").unwrap();
+        assert!(fallback.html.contains("A--&gt;B"));
+        assert!(!fallback.html.contains("GraphReady"));
+    }
+
+    #[test]
+    fn docx_embeds_diagram_png_with_relationship_and_source_description() {
+        let markdown = "```mermaid\nflowchart TD\nA-->B\n```";
+        let source = SemanticDocument::parse(markdown, None)
+            .diagram_sources()
+            .remove(0);
+        let png = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=").unwrap();
+        let prepared = PreparedDiagrams {
+            artifacts: HashMap::new(),
+            print_artifacts: HashMap::new(),
+            rasters: HashMap::from([(
+                source.diagram_id,
+                RasterDiagram {
+                    png: png.clone(),
+                    width: 1,
+                    height: 1,
+                },
+            )]),
+            warnings: Vec::new(),
+        };
+        let path = unique_path("docx");
+        let result =
+            export_docx_with_prepared(&request(ExportFormat::Docx, &path, markdown), prepared)
+                .unwrap();
+        assert!(result.warnings.is_empty());
+        let bytes = fs::read(&path).unwrap();
+        let xml = docx_zip_entry(&bytes, "word/document.xml");
+        let rels = docx_zip_entry(&bytes, "word/_rels/document.xml.rels");
+        assert!(xml.contains("descr=\"Mermaid 图表，源码字节"));
+        assert!(xml.contains("r:embed=\"rIdImage"));
+        assert!(rels.contains(
+            "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\""
+        ));
+        assert!(!xml.contains("A--&gt;B"));
+        let image_id = xml
+            .split("r:embed=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
+        assert!(rels.contains(&format!("Id=\"{image_id}\"")));
+        assert!(rels.contains(&format!("Target=\"media/{image_id}.png\"")));
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut picture = Vec::new();
+        archive
+            .by_name(&format!("word/media/{image_id}.png"))
+            .unwrap()
+            .read_to_end(&mut picture)
+            .unwrap();
+        assert_eq!(picture, png);
+    }
+
+    fn docx_zip_entry(bytes: &[u8], name: &str) -> String {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut content = String::new();
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_string(&mut content)
+            .unwrap();
+        content
+    }
+
+    fn first_picture_size(value: &serde_json::Value) -> Option<(u64, u64)> {
+        if value.get("type").and_then(serde_json::Value::as_str) == Some("pic") {
+            let size = value.pointer("/data/size")?.as_array()?;
+            return Some((size.first()?.as_u64()?, size.get(1)?.as_u64()?));
+        }
+        match value {
+            serde_json::Value::Array(values) => values.iter().find_map(first_picture_size),
+            serde_json::Value::Object(values) => values.values().find_map(first_picture_size),
+            _ => None,
+        }
+    }
+
+    fn append_docx_text(value: &serde_json::Value, output: &mut String) {
+        if value.get("type").and_then(serde_json::Value::as_str) == Some("text") {
+            if let Some(text) = value
+                .pointer("/data/text")
+                .and_then(serde_json::Value::as_str)
+            {
+                output.push_str(text);
+            }
+        }
+        if let Some(children) = value
+            .pointer("/data/children")
+            .and_then(serde_json::Value::as_array)
+        {
+            for child in children {
+                append_docx_text(child, output);
+            }
+        }
+    }
+
+    fn docx_paragraphs(value: &serde_json::Value) -> Vec<(&serde_json::Value, String)> {
+        value
+            .pointer("/document/children")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|child| {
+                child.get("type").and_then(serde_json::Value::as_str) == Some("paragraph")
+            })
+            .map(|paragraph| {
+                let mut text = String::new();
+                append_docx_text(paragraph, &mut text);
+                (paragraph, text)
+            })
+            .collect()
+    }
+
+    fn docx_run_for_text<'a>(
+        value: &'a serde_json::Value,
+        expected: &str,
+    ) -> Option<&'a serde_json::Value> {
+        if value.get("type").and_then(serde_json::Value::as_str) == Some("run") {
+            let mut text = String::new();
+            append_docx_text(value, &mut text);
+            if text == expected {
+                return Some(value);
+            }
+        }
+        value
+            .pointer("/data/children")
+            .and_then(serde_json::Value::as_array)?
+            .iter()
+            .find_map(|child| docx_run_for_text(child, expected))
     }
 
     #[test]
@@ -1290,28 +659,46 @@ mod tests {
             validate_request(&directory_request).unwrap_err().code,
             "INVALID_FILE_TARGET"
         );
-        fs::remove_dir(directory).unwrap();
     }
 
     #[test]
     fn exports_sanitized_standalone_html_without_remote_image_fetches() {
         let path = unique_path("html");
-        let request = request(
+        let mut request = request(
             ExportFormat::Html,
             &path,
-            "# Heading\n\n<script>alert(1)</script>\n\n![remote](https://example.com/x.png)",
+            "# Heading\n\n<script>alert(1)</script>\n\n![remote](https://example.com/x.png)\n\n<img src=\"https://raw.example/a.png\" srcset=\"local.png 1x, https://raw.example/b.png 2x\" alt=\"raw\">",
         );
         let result = export_html(&request).unwrap();
         let html = fs::read_to_string(&path).unwrap();
         assert!(html.starts_with("<!doctype html>"));
-        assert!(html.contains("Heading"));
+        assert!(html.contains("default-src 'none'; img-src data:"));
+        assert!(html.contains("script-src 'none'"));
+        assert!(html.contains("<h1 id=\"heading\">Heading</h1>"));
         assert!(!html.contains("<script>alert"));
         assert!(!html.contains("https://example.com/x.png"));
+        assert!(!html.contains("raw.example"));
+        assert!(!html.contains("local.png"));
+        assert!(!html.contains("<img alt=\"raw\""));
         assert!(result
             .warnings
             .iter()
             .any(|warning| warning.code == "REMOTE_IMAGE_SKIPPED"));
-        fs::remove_file(path).unwrap();
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "RAW_HTML_IMAGE_SKIPPED"));
+
+        request.format = ExportFormat::Pdf;
+        request.target_path = unique_path("pdf").to_string_lossy().into_owned();
+        let prepared = prepare_pdf(&request, "raw-image-policy").unwrap();
+        assert!(prepared.html.contains("script-src 'unsafe-inline'"));
+        assert!(!prepared.html.contains("raw.example"));
+        assert!(!prepared.html.contains("local.png"));
+        assert!(prepared
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "RAW_HTML_IMAGE_SKIPPED"));
     }
 
     #[test]
@@ -1326,15 +713,15 @@ mod tests {
         let source_path = directory.join("fixture.md");
         fs::write(&source_path, b"fixture").unwrap();
         let output = directory.join("portable.html");
-        let mut request = request(
+        let mut html_request = request(
             ExportFormat::Html,
             &output,
             "# 中文 😀\n\n![像素](像素.png)\n\n[site](https://example.com)",
         );
-        request.snapshot.source_path = Some(source_path.to_string_lossy().into());
-        request.options.include_local_images = true;
+        html_request.snapshot.source_path = Some(source_path.to_string_lossy().into());
+        html_request.options.include_local_images = true;
 
-        let result = export_html(&request).unwrap();
+        let result = export_html(&html_request).unwrap();
         let html = fs::read_to_string(&output).unwrap();
         assert!(
             html.contains("data:image/png;base64,"),
@@ -1344,7 +731,74 @@ mod tests {
         assert!(!html.contains(&image_path.to_string_lossy().to_string()));
         assert!(html.contains("https://example.com"));
         assert!(result.warnings.is_empty());
-        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn inline_html_keeps_wrapped_text_after_whole_document_sanitization() {
+        let markdown = "Before <em>emphasis</em> and <a href=\"https://example.org/help\">help</a>.\n\n<details><summary>More</summary>Safe text</details>";
+        let path = unique_path("html");
+        export_html(&request(ExportFormat::Html, &path, markdown)).unwrap();
+        let html = fs::read_to_string(path).unwrap();
+        assert!(html.contains("<em>emphasis</em>"), "{html}");
+        assert!(
+            html.contains("<a href=\"https://example.org/help\""),
+            "{html}"
+        );
+        assert!(html.contains(">help</a>"), "{html}");
+        assert!(html.contains("<details><summary>More</summary>Safe text</details>"));
+
+        let pdf_path = unique_path("pdf");
+        let prepared = prepare_pdf(
+            &request(ExportFormat::Pdf, &pdf_path, markdown),
+            "inline-ready",
+        )
+        .unwrap();
+        assert!(prepared.html.contains("<em>emphasis</em>"));
+        assert!(prepared.html.contains(">help</a>"));
+        assert!(prepared
+            .html
+            .contains("<details><summary>More</summary>Safe text</details>"));
+    }
+
+    #[test]
+    fn inline_html_security_attributes_and_raw_images_stay_filtered() {
+        let markdown = "<em onclick=\"alert(1)\">safe</em> <a href=\"javascript:alert(1)\">blocked</a> <img src=\"https://remote.example/p.png\" onerror=\"bad()\"> <script>alert(2)</script>";
+        let path = unique_path("html");
+        let result = export_html(&request(ExportFormat::Html, &path, markdown)).unwrap();
+        let html = fs::read_to_string(path).unwrap();
+        assert!(html.contains("<em>safe</em>"), "{html}");
+        assert!(!html.contains("onclick="));
+        assert!(html.contains("blocked</a>"));
+        assert!(!html.contains("javascript:alert"));
+        assert!(!html.contains("onerror="));
+        assert!(!html.contains("remote.example"));
+        assert!(!html.contains("<script>alert(2)</script>"));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "RAW_HTML_IMAGE_SKIPPED"));
+    }
+
+    #[test]
+    fn repeats_one_cached_image_without_duplicate_warnings_or_full_html_replace_loops() {
+        let directory = unique_path("repeated-resource");
+        fs::create_dir(&directory).unwrap();
+        let image_bytes = STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+            .unwrap();
+        fs::write(directory.join("pixel.png"), image_bytes).unwrap();
+        let source = directory.join("fixture.md");
+        fs::write(&source, b"fixture").unwrap();
+        let output = directory.join("repeated.html");
+        let markdown = "![pixel](pixel.png)\n\n".repeat(1_000);
+        let mut request = request(ExportFormat::Html, &output, &markdown);
+        request.snapshot.source_path = Some(source.to_string_lossy().into_owned());
+        request.options.include_local_images = true;
+
+        let result = export_html(&request).unwrap();
+        let exported = fs::read_to_string(&output).unwrap();
+        assert_eq!(exported.matches("data:image/png;base64,").count(), 1_000);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     }
 
     #[test]
@@ -1361,7 +815,728 @@ mod tests {
         assert!(reopened.contains("Heading"));
         assert!(reopened.contains("footnote"));
         assert!(reopened.contains("https://example.com"));
-        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn exports_shared_math_subset_to_html_pdf_and_editable_docx() {
+        let markdown = concat!(
+            "Inline $x^2 + \\alpha$\n\n",
+            "$$\\frac{1}{2}$$\n\n",
+            "```math\n\\sqrt{x}\n```"
+        );
+        let html_path = unique_path("html");
+        let html_request = request(ExportFormat::Html, &html_path, markdown);
+        let html_result = export_html(&html_request).unwrap();
+        let html = fs::read_to_string(&html_path).unwrap();
+        assert_eq!(html.matches("<math").count(), 3, "{html}");
+        assert!(html.contains("<mfrac>"));
+        assert!(
+            html_result.warnings.is_empty(),
+            "{:?}",
+            html_result.warnings
+        );
+
+        let pdf_path = unique_path("pdf");
+        let pdf_request = request(ExportFormat::Pdf, &pdf_path, markdown);
+        let prepared = prepare_pdf(&pdf_request, "math-ready").unwrap();
+        assert_eq!(prepared.html.matches("<math").count(), 3);
+        assert!(prepared.html.contains("<msqrt>"));
+        assert!(prepared.warnings.is_empty(), "{:?}", prepared.warnings);
+
+        let docx_path = unique_path("docx");
+        let docx_request = request(ExportFormat::Docx, &docx_path, markdown);
+        let docx_result = export_docx(&docx_request).unwrap();
+        let document_xml = docx_zip_entry(&fs::read(&docx_path).unwrap(), "word/document.xml");
+        assert_eq!(
+            document_xml.matches("<m:oMath>").count(),
+            3,
+            "{document_xml}"
+        );
+        assert!(document_xml
+            .contains("xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\""));
+        assert!(document_xml.contains("<m:f>"), "{document_xml}");
+        assert!(!document_xml.contains("MARKLITEOMML"));
+        assert!(read_docx(&fs::read(&docx_path).unwrap()).is_ok());
+        assert!(
+            docx_result.warnings.is_empty(),
+            "{:?}",
+            docx_result.warnings
+        );
+    }
+
+    #[test]
+    fn exports_named_math_families_in_body_table_and_footnote_across_formats() {
+        let markdown = concat!(
+            "Inline $x_i^2 + \\alpha + \\Omega$\n\n",
+            "$$\\frac{a}{b} + \\sqrt{x}$$\n\n",
+            "$$\\sum_{i=1}^{n} i + \\int_0^1 x\\,dx$$\n\n",
+            "```math\n\\begin{pmatrix}a & b \\\\ c & d\\end{pmatrix}\n```\n\n",
+            "```math\n\\begin{align}a &= b + c \\\\ d &= e\\end{align}\n```\n\n",
+            "| Formula |\n| --- |\n| $\\sqrt{z}$ |\n\n",
+            "Footnote[^math]\n\n[^math]: $\\sum_{k=1}^{m} k$",
+        );
+        let html_path = unique_path("html");
+        let html_result = export_html(&request(ExportFormat::Html, &html_path, markdown)).unwrap();
+        let html = fs::read_to_string(&html_path).unwrap();
+        assert_eq!(html.matches("<math").count(), 7, "{html}");
+        for marker in ["<mfrac>", "<msqrt>", "<munderover>", "<mtable"] {
+            assert!(html.contains(marker), "missing {marker}: {html}");
+        }
+        assert!(
+            html_result.warnings.is_empty(),
+            "{:?}",
+            html_result.warnings
+        );
+
+        let pdf_path = unique_path("pdf");
+        let prepared = prepare_pdf(
+            &request(ExportFormat::Pdf, &pdf_path, markdown),
+            "named-math-ready",
+        )
+        .unwrap();
+        assert_eq!(prepared.html.matches("<math").count(), 7);
+        assert!(prepared.html.contains("<mtable"));
+        assert!(prepared.warnings.is_empty(), "{:?}", prepared.warnings);
+
+        let docx_path = unique_path("docx");
+        let docx_result = export_docx(&request(ExportFormat::Docx, &docx_path, markdown)).unwrap();
+        let bytes = fs::read(docx_path).unwrap();
+        let document_xml = docx_zip_entry(&bytes, "word/document.xml");
+        let footnotes_xml = docx_zip_entry(&bytes, "word/footnotes.xml");
+        assert_eq!(
+            document_xml.matches("<m:oMath>").count() + footnotes_xml.matches("<m:oMath>").count(),
+            7
+        );
+        for marker in ["<m:f>", "<m:rad>", "<m:nary>", "<m:m>"] {
+            assert!(
+                document_xml.contains(marker) || footnotes_xml.contains(marker),
+                "missing {marker}"
+            );
+        }
+        assert!(
+            docx_result.warnings.is_empty(),
+            "{:?}",
+            docx_result.warnings
+        );
+        assert!(read_docx(&bytes).is_ok());
+    }
+
+    #[test]
+    fn docx_math_slots_cover_document_table_and_footnote_parts() {
+        let markdown = "Body $x$ and again $x$ note[^n]\n\n| Formula |\n| --- |\n| $z$ |\n\n[^n]: Foot $y$ and $y+1$";
+        let path = unique_path("docx");
+        let result = export_docx(&request(ExportFormat::Docx, &path, markdown)).unwrap();
+        let bytes = fs::read(path).unwrap();
+        let document_xml = docx_zip_entry(&bytes, "word/document.xml");
+        let footnotes_xml = docx_zip_entry(&bytes, "word/footnotes.xml");
+        assert_eq!(document_xml.matches("<m:oMath>").count(), 3);
+        assert_eq!(footnotes_xml.matches("<m:oMath>").count(), 2);
+        assert!(document_xml
+            .contains("xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\""));
+        assert!(footnotes_xml
+            .contains("xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\""));
+        assert!(!document_xml.contains("MARKLITEOMML"));
+        assert!(!footnotes_xml.contains("MARKLITEOMML"));
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        assert!(read_docx(&bytes).is_ok());
+    }
+
+    #[test]
+    fn docx_math_slots_cannot_collide_with_user_text() {
+        let markdown = "MARKLITEOMML0END $x$ note[^n]\n\n[^n]: MARKLITEOMML1END $y$";
+        let path = unique_path("docx");
+        export_docx(&request(ExportFormat::Docx, &path, markdown)).unwrap();
+        let bytes = fs::read(path).unwrap();
+        let document_xml = docx_zip_entry(&bytes, "word/document.xml");
+        let footnotes_xml = docx_zip_entry(&bytes, "word/footnotes.xml");
+        assert!(document_xml.contains("MARKLITEOMML0END"));
+        assert!(footnotes_xml.contains("MARKLITEOMML1END"));
+        assert_eq!(document_xml.matches("<m:oMath>").count(), 1);
+        assert_eq!(footnotes_xml.matches("<m:oMath>").count(), 1);
+        assert!(read_docx(&bytes).is_ok());
+    }
+
+    #[test]
+    fn invalid_footnote_math_remains_visible_with_its_warning() {
+        let markdown = "Valid $x$ note[^n]\n\n[^n]: Bad $\\href{https://example.com}{x}$";
+        let path = unique_path("docx");
+        let result = export_docx(&request(ExportFormat::Docx, &path, markdown)).unwrap();
+        let bytes = fs::read(path).unwrap();
+        let document_xml = docx_zip_entry(&bytes, "word/document.xml");
+        let footnotes_xml = docx_zip_entry(&bytes, "word/footnotes.xml");
+        assert_eq!(document_xml.matches("<m:oMath>").count(), 1);
+        assert!(!footnotes_xml.contains("<m:oMath>"));
+        assert!(footnotes_xml.contains("\\href{https://example.com}{x}"));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "MATH_COMMAND_UNSUPPORTED"));
+        assert!(read_docx(&bytes).is_ok());
+    }
+
+    #[test]
+    fn email_links_and_heading_anchors_survive_every_export_surface() {
+        let markdown = "# 中文标题\n\n# 中文标题\n\n## Dash-Name\n\n## Explicit {#custom-id}\n\n[中文](#中文标题) [second](#中文标题-2) [dash](#dash-name) [explicit](#custom-id)\n\n<one@example.org> two@example.org [three](mailto:three@example.org)";
+        let html_path = unique_path("html");
+        let html_request = request(ExportFormat::Html, &html_path, markdown);
+        export_html(&html_request).unwrap();
+        let html = fs::read_to_string(&html_path).unwrap();
+        for address in ["one", "two", "three"] {
+            assert!(
+                html.contains(&format!("href=\"mailto:{address}@example.org\"")),
+                "{html}"
+            );
+        }
+
+        let pdf_path = unique_path("pdf");
+        let pdf_request = request(ExportFormat::Pdf, &pdf_path, markdown);
+        let prepared = prepare_pdf(&pdf_request, "links-ready").unwrap();
+        for address in ["one", "two", "three"] {
+            assert!(prepared
+                .html
+                .contains(&format!("href=\"mailto:{address}@example.org\"")));
+        }
+
+        let docx_path = unique_path("docx");
+        let docx_request = request(ExportFormat::Docx, &docx_path, markdown);
+        export_docx(&docx_request).unwrap();
+        let bytes = fs::read(docx_path).unwrap();
+        let document_xml = docx_zip_entry(&bytes, "word/document.xml");
+        let relations = docx_zip_entry(&bytes, "word/_rels/document.xml.rels");
+        for index in 1..=4 {
+            assert!(
+                document_xml.contains(&format!("w:name=\"marklite_{index}\"")),
+                "{document_xml}"
+            );
+            assert!(
+                document_xml.contains(&format!("w:anchor=\"marklite_{index}\"")),
+                "{document_xml}"
+            );
+        }
+        for address in ["one", "two", "three"] {
+            assert!(
+                relations.contains(&format!("mailto:{address}@example.org")),
+                "{relations}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejected_links_keep_visible_labels_and_matching_warnings_across_formats() {
+        let markdown = "[safe](https://example.org) [blocked](javascript:alert(1))";
+        let html_path = unique_path("html");
+        let html_result = export_html(&request(ExportFormat::Html, &html_path, markdown)).unwrap();
+        let html = fs::read_to_string(html_path).unwrap();
+        assert!(html.contains("href=\"https://example.org/\""));
+        assert!(html.contains("blocked"));
+        assert!(!html.contains("javascript:"));
+
+        let pdf_path = unique_path("pdf");
+        let pdf = prepare_pdf(
+            &request(ExportFormat::Pdf, &pdf_path, markdown),
+            "link-ready",
+        )
+        .unwrap();
+        assert!(pdf.html.contains("blocked"));
+        assert!(!pdf.html.contains("javascript:"));
+
+        let docx_path = unique_path("docx");
+        let docx_result = export_docx(&request(ExportFormat::Docx, &docx_path, markdown)).unwrap();
+        let bytes = fs::read(docx_path).unwrap();
+        let document_xml = docx_zip_entry(&bytes, "word/document.xml");
+        assert!(document_xml.contains("blocked"));
+        assert!(read_docx(&bytes).is_ok());
+
+        for warnings in [&html_result.warnings, &pdf.warnings, &docx_result.warnings] {
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            assert_eq!(warnings[0].code, "UNSUPPORTED_LINK_SCHEME");
+            assert_eq!(warnings[0].target.as_deref(), Some("javascript:alert(1)"));
+        }
+    }
+
+    #[test]
+    fn docx_bookmarks_do_not_collide_and_unknown_anchors_degrade_to_text() {
+        let shared = "forty-character-heading-prefix-that-collides-when-truncated";
+        let markdown = format!(
+            "# First {{#{shared}-a}}\n\n# Second {{#{shared}-b}}\n\n[one](#{shared}-a) [two](#{shared}-b) [missing](#absent)"
+        );
+        let path = unique_path("docx");
+        let result = export_docx(&request(ExportFormat::Docx, &path, &markdown)).unwrap();
+        let document_xml = docx_zip_entry(&fs::read(path).unwrap(), "word/document.xml");
+        for index in 1..=2 {
+            assert!(document_xml.contains(&format!("w:name=\"marklite_{index}\"")));
+            assert!(document_xml.contains(&format!("w:anchor=\"marklite_{index}\"")));
+        }
+        assert!(!document_xml.contains("w:anchor=\"absent\""));
+        assert!(document_xml.contains("missing"));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "DOCX_ANCHOR_NOT_FOUND"));
+    }
+
+    #[test]
+    fn invalid_math_stays_visible_and_returns_structured_export_warnings() {
+        let markdown = r"bad $\href{https://example.com}{x}$ tail";
+        let html_path = unique_path("html");
+        let html_request = request(ExportFormat::Html, &html_path, markdown);
+        let html_result = export_html(&html_request).unwrap();
+        let html = fs::read_to_string(&html_path).unwrap();
+        assert!(html.contains("math-error"));
+        assert!(html.contains(r"\href{https://example.com}{x}"));
+        assert_eq!(html_result.warnings[0].code, "MATH_COMMAND_UNSUPPORTED");
+
+        let docx_path = unique_path("docx");
+        let docx_request = request(ExportFormat::Docx, &docx_path, markdown);
+        let docx_result = export_docx(&docx_request).unwrap();
+        let document_xml = docx_zip_entry(&fs::read(&docx_path).unwrap(), "word/document.xml");
+        assert!(document_xml.contains("\\href{https://example.com}{x}"));
+        assert_eq!(docx_result.warnings[0].code, "MATH_COMMAND_UNSUPPORTED");
+    }
+
+    #[test]
+    fn docx_preserves_distinct_break_footnote_and_table_alignment_semantics() {
+        let path = unique_path("docx");
+        let markdown = "# Semantic {#semantic}\n\n- item\n\nsoft\nline  \nhard[^1]\n\n| Left | Center | Right |\n| :--- | :----: | ----: |\n| a | b | c |\n\n[^1]: **bold** *italic* [linked](https://example.com/footnote)";
+        let docx_request = request(ExportFormat::Docx, &path, markdown);
+        let result = export_docx(&docx_request).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let document_xml = docx_zip_entry(&bytes, "word/document.xml");
+        let footnotes_xml = docx_zip_entry(&bytes, "word/footnotes.xml");
+
+        assert_eq!(
+            document_xml
+                .matches("<w:br w:type=\"textWrapping\" />")
+                .count(),
+            1
+        );
+        assert!(document_xml.contains(">soft</w:t></w:r><w:r><w:rPr /><w:t xml:space=\"preserve\"> </w:t></w:r><w:r><w:rPr /><w:t xml:space=\"preserve\">line</w:t>"));
+        // Two left-aligned cells plus the table's own default left justification.
+        assert_eq!(document_xml.matches("<w:jc w:val=\"left\" />").count(), 3);
+        assert_eq!(document_xml.matches("<w:jc w:val=\"center\" />").count(), 2);
+        assert_eq!(document_xml.matches("<w:jc w:val=\"right\" />").count(), 2);
+        assert!(footnotes_xml.contains("<w:b />"));
+        assert!(footnotes_xml.contains("<w:i />"));
+        assert!(footnotes_xml.contains(">linked</w:t>"));
+        assert!(footnotes_xml.contains("> (https://example.com/footnote)</w:t>"));
+        assert!(result.warnings.iter().any(|warning| {
+            warning.code == "DOCX_FOOTNOTE_LINK_DEGRADED"
+                && warning.target.as_deref() == Some("https://example.com/footnote")
+        }));
+
+        let html_path = unique_path("html");
+        let html_request = request(ExportFormat::Html, &html_path, markdown);
+        export_html(&html_request).unwrap();
+        let html = fs::read_to_string(&html_path).unwrap();
+        assert!(html.contains("<h1 id=\"semantic\">Semantic</h1>"));
+        assert!(html.contains("soft\nline<br>\nhard"));
+        assert!(html.contains("text-align: center"));
+        assert!(html.contains("text-align: right"));
+        assert!(html.contains("<strong>bold</strong>"));
+        assert!(html.contains("https://example.com/footnote"));
+
+        let pdf_path = unique_path("pdf");
+        let pdf_request = request(ExportFormat::Pdf, &pdf_path, markdown);
+        let prepared = prepare_pdf(&pdf_request, "shared-semantic-fixture").unwrap();
+        assert!(prepared.html.contains("<h1 id=\"semantic\">Semantic</h1>"));
+        assert!(prepared.html.contains("soft\nline<br>\nhard"));
+        assert!(prepared.html.contains("text-align: center"));
+        assert!(prepared.html.contains("<strong>bold</strong>"));
+        assert!(prepared.html.contains("https://example.com/footnote"));
+    }
+
+    #[test]
+    fn docx_preserves_complete_tight_list_paragraphs_and_inline_styles() {
+        let path = unique_path("docx");
+        let request = request(
+            ExportFormat::Docx,
+            &path,
+            concat!(
+                "- alpha **bold** *italic* [linked](https://example.com) `coded` omega\n",
+                "- [ ] finish task\n",
+                "- [x] complete task\n\n",
+                "5. fifth **strong tail**\n",
+                "   1. nested *detail*\n",
+                "6. sixth\n\n",
+                "- loose first\n\n",
+                "  loose continuation\n",
+            ),
+        );
+
+        let result = export_docx(&request).unwrap();
+        let reopened: serde_json::Value =
+            serde_json::from_str(&read_docx(&fs::read(&path).unwrap()).unwrap().json()).unwrap();
+        let paragraphs = docx_paragraphs(&reopened);
+        let texts = paragraphs
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            texts,
+            [
+                "中文 Title",
+                "alpha bold italic linked coded omega",
+                "☐ finish task",
+                "☒ complete task",
+                "fifth strong tail",
+                "nested detail",
+                "sixth",
+                "loose first",
+                "loose continuation",
+            ]
+        );
+
+        let tight = paragraphs[1].0;
+        assert_eq!(
+            tight.pointer("/data/property/numberingProperty/level"),
+            Some(&serde_json::json!(0))
+        );
+        assert_eq!(
+            docx_run_for_text(tight, "bold").and_then(|run| run.pointer("/data/runProperty/bold")),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            docx_run_for_text(tight, "italic")
+                .and_then(|run| run.pointer("/data/runProperty/italic")),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            docx_run_for_text(tight, "coded")
+                .and_then(|run| run.pointer("/data/runProperty/fonts/ascii"))
+                .and_then(serde_json::Value::as_str),
+            Some("Consolas")
+        );
+        assert_eq!(
+            paragraphs[5]
+                .0
+                .pointer("/data/property/numberingProperty/level"),
+            Some(&serde_json::json!(1))
+        );
+        for index in [2, 3, 4, 6, 7] {
+            assert_eq!(
+                paragraphs[index]
+                    .0
+                    .pointer("/data/property/numberingProperty/level"),
+                Some(&serde_json::json!(0)),
+                "unexpected numbering for {:?}",
+                paragraphs[index].1
+            );
+        }
+        assert_eq!(
+            paragraphs[8].0.pointer("/data/property/numberingProperty"),
+            None
+        );
+        assert!(tight.to_string().contains("\"type\":\"hyperlink\""));
+        assert!(reopened.to_string().contains("https://example.com"));
+        assert!(
+            reopened.to_string().contains("\"overrideStart\":5"),
+            "{reopened}"
+        );
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    }
+
+    #[test]
+    fn common_extensions_keep_link_styles_and_definition_paragraphs_across_formats() {
+        let markdown = concat!(
+            "Term **one**\n: First *paragraph*.\n\n  Second paragraph with [**bold** `code`](https://example.com).\n\n",
+            "> [!WARNING]\n> Keep **alert** text.\n\n",
+            "[**strong** *em* `coded` ~~strike~~](https://example.org)\n",
+        );
+        let docx_path = unique_path("docx");
+        let docx_result = export_docx(&request(ExportFormat::Docx, &docx_path, markdown)).unwrap();
+        let reopened: serde_json::Value =
+            serde_json::from_str(&read_docx(&fs::read(&docx_path).unwrap()).unwrap().json())
+                .unwrap();
+        let paragraphs = docx_paragraphs(&reopened);
+        let texts = paragraphs
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>();
+        assert!(texts.contains(&"First paragraph."), "{texts:?}");
+        assert!(
+            texts.contains(&"Second paragraph with bold code."),
+            "{texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text.contains("WARNING")),
+            "{texts:?}"
+        );
+        let linked = paragraphs
+            .iter()
+            .find(|(_, text)| text.contains("strong em coded strike"))
+            .unwrap()
+            .0;
+        assert_eq!(
+            docx_run_for_text(linked, "strong")
+                .and_then(|run| run.pointer("/data/runProperty/bold")),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            docx_run_for_text(linked, "em").and_then(|run| run.pointer("/data/runProperty/italic")),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            docx_run_for_text(linked, "coded")
+                .and_then(|run| run.pointer("/data/runProperty/fonts/ascii")),
+            Some(&serde_json::json!("Consolas"))
+        );
+        assert_eq!(
+            docx_run_for_text(linked, "strike")
+                .and_then(|run| run.pointer("/data/runProperty/strike")),
+            Some(&serde_json::json!(true))
+        );
+        assert!(
+            docx_result.warnings.is_empty(),
+            "{:?}",
+            docx_result.warnings
+        );
+
+        let html_path = unique_path("html");
+        export_html(&request(ExportFormat::Html, &html_path, markdown)).unwrap();
+        let html = fs::read_to_string(&html_path).unwrap();
+        assert!(
+            html.contains("<dt>Term <strong>one</strong></dt>"),
+            "{html}"
+        );
+        assert!(html.contains("Second paragraph with"));
+        assert!(html.contains("markdown-alert-warning"));
+        assert!(html.contains("<strong>strong</strong>"));
+        let pdf_path = unique_path("pdf");
+        let prepared = prepare_pdf(
+            &request(ExportFormat::Pdf, &pdf_path, markdown),
+            "common-extensions",
+        )
+        .unwrap();
+        assert!(prepared.html.contains("markdown-alert-warning"));
+        assert!(prepared.html.contains("Second paragraph with"));
+    }
+
+    #[test]
+    fn maps_all_docx_page_options_to_exact_content_widths() {
+        let path = unique_path("docx");
+        let mut request = request(ExportFormat::Docx, &path, "body");
+        let cases = [
+            (
+                ExportPaperSize::A4,
+                ExportOrientation::Portrait,
+                ExportMarginPreset::Narrow,
+                6_645_910,
+            ),
+            (
+                ExportPaperSize::A4,
+                ExportOrientation::Portrait,
+                ExportMarginPreset::Normal,
+                5_731_510,
+            ),
+            (
+                ExportPaperSize::A4,
+                ExportOrientation::Portrait,
+                ExportMarginPreset::Wide,
+                4_817_110,
+            ),
+            (
+                ExportPaperSize::A4,
+                ExportOrientation::Landscape,
+                ExportMarginPreset::Narrow,
+                9_777_730,
+            ),
+            (
+                ExportPaperSize::A4,
+                ExportOrientation::Landscape,
+                ExportMarginPreset::Normal,
+                8_863_330,
+            ),
+            (
+                ExportPaperSize::A4,
+                ExportOrientation::Landscape,
+                ExportMarginPreset::Wide,
+                7_948_930,
+            ),
+            (
+                ExportPaperSize::Letter,
+                ExportOrientation::Portrait,
+                ExportMarginPreset::Narrow,
+                6_858_000,
+            ),
+            (
+                ExportPaperSize::Letter,
+                ExportOrientation::Portrait,
+                ExportMarginPreset::Normal,
+                5_943_600,
+            ),
+            (
+                ExportPaperSize::Letter,
+                ExportOrientation::Portrait,
+                ExportMarginPreset::Wide,
+                5_029_200,
+            ),
+            (
+                ExportPaperSize::Letter,
+                ExportOrientation::Landscape,
+                ExportMarginPreset::Narrow,
+                9_144_000,
+            ),
+            (
+                ExportPaperSize::Letter,
+                ExportOrientation::Landscape,
+                ExportMarginPreset::Normal,
+                8_229_600,
+            ),
+            (
+                ExportPaperSize::Letter,
+                ExportOrientation::Landscape,
+                ExportMarginPreset::Wide,
+                7_315_200,
+            ),
+        ];
+
+        for (paper_size, orientation, margin, expected_width) in cases {
+            request.options.paper_size = paper_size;
+            request.options.orientation = orientation;
+            request.options.margin = margin;
+            assert_eq!(
+                DocxPageLayout::from_request(&request).content_width_emu(),
+                expected_width
+            );
+        }
+    }
+
+    #[test]
+    fn fits_docx_pictures_to_content_width_without_upscaling() {
+        let max_width = 5_731_510;
+        let small = Pic::new_with_dimensions(vec![1], 100, 50);
+        let small_size = small.size;
+        assert_eq!(
+            fit_docx_picture_to_content_width(small, max_width).size,
+            small_size
+        );
+
+        let wide = fit_docx_picture_to_content_width(
+            Pic::new_with_dimensions(vec![1], 2_000, 1_000),
+            max_width,
+        );
+        assert_eq!(wide.size, (max_width, 2_865_755));
+
+        let tall = fit_docx_picture_to_content_width(
+            Pic::new_with_dimensions(vec![1], 1_000, 4_000),
+            max_width,
+        );
+        assert_eq!(tall.size, (max_width, 22_926_040));
+
+        let extreme = fit_docx_picture_to_content_width(
+            Pic::new_with_dimensions(vec![1], 1, 1).size(u32::MAX, u32::MAX),
+            max_width,
+        );
+        assert_eq!(extreme.size, (max_width, max_width));
+    }
+
+    #[test]
+    fn writes_the_fitted_local_picture_extent_into_exported_docx() {
+        let directory = unique_path("docx-image");
+        fs::create_dir(&directory).unwrap();
+        fs::write(
+            directory.join("wide.png"),
+            STANDARD
+                .decode("iVBORw0KGgoAAAANSUhEUgAAB9AAAAABCAYAAACG/TV9AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAdSURBVGhD7cEBAQAAAIKg/p+2I8ACAAAAAAAAADrpxiKStV4fBQAAAABJRU5ErkJggg==")
+                .unwrap(),
+        )
+        .unwrap();
+        let source = directory.join("fixture.md");
+        fs::write(&source, b"fixture").unwrap();
+        let output = directory.join("wide.docx");
+        let mut request = request(ExportFormat::Docx, &output, "![wide](wide.png)");
+        request.snapshot.source_path = Some(source.to_string_lossy().into_owned());
+        request.options.include_local_images = true;
+
+        let result = export_docx(&request).unwrap();
+        let reopened: serde_json::Value =
+            serde_json::from_str(&read_docx(&fs::read(output).unwrap()).unwrap().json()).unwrap();
+        assert_eq!(first_picture_size(&reopened), Some((5_731_510, 2_866)));
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    }
+
+    #[test]
+    fn exports_relative_local_links_from_source_instead_of_output_directory() {
+        let directory = unique_path("link-fixture");
+        let source_directory = directory.join("源 文档");
+        let output_directory = directory.join("other-output");
+        fs::create_dir_all(&source_directory).unwrap();
+        fs::create_dir_all(&output_directory).unwrap();
+        let source = source_directory.join("index.md");
+        let linked = directory.join("中文 目标.md");
+        fs::write(&source, b"fixture").unwrap();
+        fs::write(&linked, b"linked").unwrap();
+        let output = output_directory.join("portable.html");
+        let mut html_request = request(
+            ExportFormat::Html,
+            &output,
+            "[local](../%E4%B8%AD%E6%96%87%20%E7%9B%AE%E6%A0%87.md#section)",
+        );
+        html_request.snapshot.source_path = Some(source.to_string_lossy().into_owned());
+
+        let result = export_html(&html_request).unwrap();
+        let exported = fs::read_to_string(output).unwrap();
+        let mut expected = url::Url::from_file_path(linked.canonicalize().unwrap()).unwrap();
+        expected.set_fragment(Some("section"));
+        assert!(exported.contains(expected.as_str()), "{exported}");
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+
+        let docx_output = output_directory.join("portable.docx");
+        let mut docx_request = request(
+            ExportFormat::Docx,
+            &docx_output,
+            "[local](../%E4%B8%AD%E6%96%87%20%E7%9B%AE%E6%A0%87.md#section)",
+        );
+        docx_request.snapshot.source_path = Some(source.to_string_lossy().into_owned());
+        let docx_result = export_docx(&docx_request).unwrap();
+        let reopened = read_docx(&fs::read(docx_output).unwrap()).unwrap().json();
+        assert!(reopened.contains(expected.as_str()), "{reopened}");
+        assert!(
+            docx_result.warnings.is_empty(),
+            "{:?}",
+            docx_result.warnings
+        );
+    }
+
+    #[test]
+    fn docx_preserves_ordered_list_start_and_nested_instances() {
+        let path = unique_path("docx");
+        let request = request(
+            ExportFormat::Docx,
+            &path,
+            "5. fifth\n6. sixth\n\n   7. nested seven\n   8. nested eight\n\nseparator\n\n99. ninety-nine",
+        );
+        export_docx(&request).unwrap();
+        let reopened = read_docx(&fs::read(&path).unwrap()).unwrap().json();
+        assert!(reopened.contains("\"overrideStart\": 5"), "{reopened}");
+        assert!(reopened.contains("\"overrideStart\": 7"), "{reopened}");
+        assert!(reopened.contains("\"overrideStart\": 99"), "{reopened}");
+    }
+
+    #[test]
+    fn prepares_all_formats_from_thousands_of_nested_blocks_without_recursion() {
+        let depth = 3_000;
+        let markdown = format!("{}leaf", "> ".repeat(depth));
+
+        let html_path = unique_path("html");
+        let html_request = request(ExportFormat::Html, &html_path, &markdown);
+        export_html(&html_request).unwrap();
+        assert!(fs::read_to_string(&html_path).unwrap().contains("leaf"));
+
+        let pdf_path = unique_path("pdf");
+        let pdf_request = request(ExportFormat::Pdf, &pdf_path, &markdown);
+        assert!(prepare_pdf(&pdf_request, "deep-nesting")
+            .unwrap()
+            .html
+            .contains("leaf"));
+
+        let docx_path = unique_path("docx");
+        let docx_request = request(ExportFormat::Docx, &docx_path, &markdown);
+        export_docx(&docx_request).unwrap();
+        assert!(read_docx(&fs::read(&docx_path).unwrap())
+            .unwrap()
+            .json()
+            .contains("leaf"));
     }
 
     #[test]
@@ -1418,40 +1593,43 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_pdf_bytes_without_replacing_the_existing_target() {
-        let path = unique_path("pdf");
-        fs::write(&path, b"existing-pdf").unwrap();
-        let request = request(ExportFormat::Pdf, &path, "body");
-        assert_eq!(
-            commit_pdf(&request, b"not-a-pdf").unwrap_err().code,
-            "INVALID_PDF_OUTPUT"
-        );
-        assert_eq!(fs::read(&path).unwrap(), b"existing-pdf");
+    fn exports_only_marklite_owned_standalone_mind_map_svg() {
+        let path = unique_path("svg");
+        let svg = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 80\" width=\"100\" height=\"80\" data-marklite-mind-map=\"1\"><title>脑图</title><rect width=\"100\" height=\"80\" fill=\"#ffffff\"/></svg>";
+        let mut request = request(ExportFormat::Svg, &path, "# 脑图");
+        request.mind_map_svg = Some(svg.to_string());
 
-        let valid = b"%PDF-1.4\n%%EOF\n";
-        let result = commit_pdf(&request, valid).unwrap();
-        assert_eq!(result.job_id, "job-1");
-        assert_eq!(fs::read(&path).unwrap(), valid);
-        fs::remove_file(path).unwrap();
+        let result = export_svg(&request).unwrap();
+        assert_eq!(result.format, ExportFormat::Svg);
+        assert_eq!(fs::read_to_string(&path).unwrap(), svg);
+        assert!(result.warnings.is_empty());
     }
 
     #[test]
-    fn enforces_total_embedded_resource_budget() {
-        let mut total = MAX_EMBEDDED_RESOURCE_BYTES - 1;
-        let mut warnings = Vec::new();
-        assert!(reserve_export_resource(
-            &mut total,
-            1,
-            &mut warnings,
-            "first.png"
-        ));
-        assert!(!reserve_export_resource(
-            &mut total,
-            1,
-            &mut warnings,
-            "second.png"
-        ));
-        assert_eq!(total, MAX_EMBEDDED_RESOURCE_BYTES);
-        assert_eq!(warnings[0].code, "EXPORT_RESOURCE_BUDGET_EXCEEDED");
+    fn rejects_missing_active_or_executable_svg_payloads() {
+        let path = unique_path("svg");
+        let missing = request(ExportFormat::Svg, &path, "# 脑图");
+        assert_eq!(
+            validate_request(&missing).unwrap_err().code,
+            "INVALID_MIND_MAP_SVG"
+        );
+
+        let mut executable = request(ExportFormat::Svg, &path, "# 脑图");
+        executable.mind_map_svg = Some(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><svg data-marklite-mind-map=\"1\"><script>alert(1)</script></svg>"
+                .to_string(),
+        );
+        assert_eq!(
+            export_svg(&executable).unwrap_err().code,
+            "INVALID_MIND_MAP_SVG"
+        );
+
+        let html_path = unique_path("html");
+        let mut unexpected = request(ExportFormat::Html, &html_path, "body");
+        unexpected.mind_map_svg = Some("<svg></svg>".to_string());
+        assert_eq!(
+            validate_request(&unexpected).unwrap_err().code,
+            "INVALID_EXPORT_REQUEST"
+        );
     }
 }

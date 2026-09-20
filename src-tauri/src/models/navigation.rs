@@ -13,11 +13,7 @@ pub enum MarkdownTargetDto {
     External {
         url: String,
     },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LocalImageDto {
-    pub data_url: String,
-    pub path: String,
+    Email {
+        address: String,
+    },
 }

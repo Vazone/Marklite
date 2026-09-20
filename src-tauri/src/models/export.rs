@@ -6,6 +6,8 @@ pub enum ExportFormat {
     Html,
     Pdf,
     Docx,
+    Svg,
+    Png,
 }
 
 impl ExportFormat {
@@ -14,7 +16,23 @@ impl ExportFormat {
             Self::Html => "html",
             Self::Pdf => "pdf",
             Self::Docx => "docx",
+            Self::Svg => "svg",
+            Self::Png => "png",
         }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExportTargetKind {
+    #[default]
+    File,
+    Directory,
+}
+
+impl ExportTargetKind {
+    pub fn is_file(&self) -> bool {
+        *self == Self::File
     }
 }
 
@@ -41,7 +59,7 @@ pub enum ExportMarginPreset {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExportSnapshot {
     pub job_id: String,
     pub tab_id: String,
@@ -52,7 +70,7 @@ pub struct ExportSnapshot {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExportOptions {
     pub paper_size: ExportPaperSize,
     pub orientation: ExportOrientation,
@@ -62,12 +80,16 @@ pub struct ExportOptions {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExportRequest {
     pub snapshot: ExportSnapshot,
     pub target_path: String,
+    #[serde(default, skip_serializing_if = "ExportTargetKind::is_file")]
+    pub target_kind: ExportTargetKind,
     pub format: ExportFormat,
     pub options: ExportOptions,
+    #[serde(default)]
+    pub mind_map_svg: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -98,5 +120,7 @@ pub struct ExportResult {
     pub job_id: String,
     pub format: ExportFormat,
     pub path: String,
+    #[serde(skip_serializing_if = "ExportTargetKind::is_file")]
+    pub target_kind: ExportTargetKind,
     pub warnings: Vec<ExportWarning>,
 }

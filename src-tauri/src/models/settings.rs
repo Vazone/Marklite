@@ -5,8 +5,9 @@ const DEFAULT_SETTINGS_JSON: &str = include_str!("../../../src/shared/default-se
 pub const SETTINGS_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppSettings {
+    pub language: AppLanguage,
     pub theme: ThemeMode,
     pub accent_color: String,
     pub editor_font_family: String,
@@ -14,7 +15,6 @@ pub struct AppSettings {
     pub editor_font_size: u32,
     pub preview_font_size: u32,
     pub line_height: f32,
-    pub interface_scale: f32,
     pub corner_radius: u32,
     pub show_line_numbers: bool,
     pub word_wrap: bool,
@@ -42,6 +42,14 @@ pub enum ThemeMode {
     System,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AppLanguage {
+    #[serde(rename = "en")]
+    English,
+    #[serde(rename = "zh-CN")]
+    SimplifiedChinese,
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         serde_json::from_str(DEFAULT_SETTINGS_JSON)
@@ -59,7 +67,6 @@ impl AppSettings {
         validate_range("editorFontSize", self.editor_font_size, 12, 24)?;
         validate_range("previewFontSize", self.preview_font_size, 12, 28)?;
         validate_float_range("lineHeight", self.line_height, 1.2, 2.0)?;
-        validate_float_range("interfaceScale", self.interface_scale, 0.9, 1.2)?;
         validate_range("cornerRadius", self.corner_radius, 0, 16)?;
         validate_range("tabSize", self.tab_size, 2, 8)?;
         validate_range(
@@ -141,9 +148,9 @@ mod tests {
             .contains("recentFilesLimit"));
 
         let settings = AppSettings {
-            interface_scale: f32::NAN,
+            line_height: f32::NAN,
             ..AppSettings::default()
         };
-        assert!(settings.validate().unwrap_err().contains("interfaceScale"));
+        assert!(settings.validate().unwrap_err().contains("lineHeight"));
     }
 }

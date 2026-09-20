@@ -52,6 +52,20 @@ impl AppError {
         )
     }
 
+    pub fn file_target_changed(path: &str) -> Self {
+        Self::new(
+            "FILE_TARGET_CHANGED",
+            format!("保存前文件目标已发生变化，已阻止覆盖：{path}"),
+        )
+    }
+
+    pub fn file_content_changed(path: &str) -> Self {
+        Self::new(
+            "FILE_CONTENT_CHANGED",
+            format!("文件内容已被外部修改，已阻止覆盖：{path}"),
+        )
+    }
+
     pub fn settings_read_failed(err: impl std::fmt::Display) -> Self {
         Self::new("SETTINGS_READ_FAILED", format!("读取设置失败：{err}"))
     }
@@ -85,6 +99,27 @@ impl AppError {
         )
     }
 
+    pub fn recent_files_version_unsupported(version: u64) -> Self {
+        Self::new(
+            "RECENT_FILES_VERSION_UNSUPPORTED",
+            format!("当前 MarkLite 不支持最近文件版本 {version}，请使用兼容版本"),
+        )
+    }
+
+    pub fn unsupported_path_encoding() -> Self {
+        Self::new(
+            "UNSUPPORTED_PATH_ENCODING",
+            "当前路径无法无损表示为 UTF-8，MarkLite 已拒绝该路径",
+        )
+    }
+
+    pub fn background_task_failed(operation: &str, err: impl std::fmt::Display) -> Self {
+        Self::new(
+            "BACKGROUND_TASK_FAILED",
+            format!("{operation}后台任务失败：{err}"),
+        )
+    }
+
     pub fn invalid_markdown_target(err: impl std::fmt::Display) -> Self {
         Self::new(
             "INVALID_MARKDOWN_TARGET",
@@ -110,6 +145,21 @@ impl AppError {
         Self::new("LOCAL_IMAGES_DISABLED", "请先在设置中允许本地图片")
     }
 
+    pub fn invalid_image_job() -> Self {
+        Self::new("INVALID_IMAGE_JOB", "本地图片加载任务标识无效")
+    }
+
+    pub fn image_load_cancelled() -> Self {
+        Self::new("IMAGE_LOAD_CANCELLED", "本地图片加载已取消")
+    }
+
+    pub fn preview_image_budget_exceeded() -> Self {
+        Self::new(
+            "PREVIEW_IMAGE_BUDGET_EXCEEDED",
+            "预览图片超过当前文档的资源预算，已停止继续加载",
+        )
+    }
+
     pub fn unsupported_image_type(path: &str) -> Self {
         Self::new(
             "UNSUPPORTED_IMAGE_TYPE",
@@ -123,6 +173,20 @@ impl AppError {
 
     pub fn session_write_failed(err: impl std::fmt::Display) -> Self {
         Self::new("SESSION_WRITE_FAILED", format!("保存会话失败：{err}"))
+    }
+
+    pub fn session_version_unsupported(version: u64) -> Self {
+        Self::new(
+            "SESSION_VERSION_UNSUPPORTED",
+            format!("当前 MarkLite 不支持会话文件版本 {version}，请使用兼容版本"),
+        )
+    }
+
+    pub fn app_data_create_failed(kind: std::io::ErrorKind) -> Self {
+        Self::new(
+            "APP_DATA_CREATE_FAILED",
+            format!("无法创建应用数据目录（{kind:?}）"),
+        )
     }
 
     pub fn startup_diagnostics_unavailable() -> Self {

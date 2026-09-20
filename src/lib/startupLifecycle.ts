@@ -15,16 +15,18 @@ export type FrontendStartupStage =
   | 'dragDrop'
   | 'editorMount';
 
-export type FrontendStartupStatus = 'started' | 'succeeded' | 'failed';
+export type FrontendStartupStatus = 'started' | 'succeeded' | 'degraded' | 'failed';
 
 export type FrontendStartupCode =
   | 'appRootMissing'
   | 'moduleLoadFailed'
   | 'svelteMountFailed'
+  | 'interactiveFrameTimeout'
   | 'readySentinelMissing'
   | 'readyHandshakeFailed'
   | 'unhandledError'
   | 'unhandledRejection'
+  | 'stageDegraded'
   | 'initializationFailed'
   | 'editorMountFailed';
 
@@ -57,7 +59,7 @@ export function startupElapsedMs(startedAt: number, now = performance.now()): nu
 export function requireAppRoot(documentRef: Document): HTMLElement {
   const root = documentRef.getElementById('app');
   if (!(root instanceof HTMLElement)) {
-    throw new StartupLifecycleError('appRootMissing', '无法找到应用根节点');
+    throw new StartupLifecycleError('appRootMissing', 'The application root element was not found.');
   }
   return root;
 }
@@ -67,9 +69,38 @@ export function startupFailureCode(error: unknown, fallback: FrontendStartupCode
 }
 
 export async function waitForInteractiveFrame(
-  requestFrame: (callback: FrameRequestCallback) => number = window.requestAnimationFrame.bind(window)
+  requestFrame: (callback: FrameRequestCallback) => number = window.requestAnimationFrame.bind(window),
+  timeoutMs = 2_000,
+  cancelFrame: (handle: number) => void = window.cancelAnimationFrame.bind(window)
 ): Promise<void> {
-  await new Promise<void>((resolve) => requestFrame(() => resolve()));
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let frameHandle: number | undefined;
+    const timeoutHandle = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (frameHandle !== undefined) cancelFrame(frameHandle);
+      reject(
+        new StartupLifecycleError(
+          'interactiveFrameTimeout',
+          'The application did not reach an interactive frame within the startup deadline.'
+        )
+      );
+    }, timeoutMs);
+
+    try {
+      frameHandle = requestFrame(() => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeoutHandle);
+        resolve();
+      });
+    } catch (error) {
+      settled = true;
+      window.clearTimeout(timeoutHandle);
+      reject(error);
+    }
+  });
 }
 
 export async function confirmInteractiveReady(
@@ -81,7 +112,7 @@ export async function confirmInteractiveReady(
   await waitForInteractiveFrame(requestFrame);
   const sentinel = root.querySelector<HTMLElement>(STARTUP_READY_SELECTOR);
   if (!sentinel) {
-    throw new StartupLifecycleError('readySentinelMissing', '应用界面未完成挂载');
+    throw new StartupLifecycleError('readySentinelMissing', 'The application interface did not finish mounting.');
   }
 
   sentinel.dataset.markliteInteractive = 'true';
@@ -89,7 +120,7 @@ export async function confirmInteractiveReady(
     await acknowledge(startupElapsedMs(startedAt));
   } catch {
     delete sentinel.dataset.markliteInteractive;
-    throw new StartupLifecycleError('readyHandshakeFailed', '启动就绪握手失败');
+    throw new StartupLifecycleError('readyHandshakeFailed', 'The startup readiness handshake failed.');
   }
 }
 
@@ -174,12 +205,12 @@ export function renderStartupRecovery(
   });
 
   const title = documentRef.createElement('h1');
-  title.textContent = 'MarkLite 未能完成启动';
+  title.textContent = 'MarkLite could not finish starting';
   title.style.margin = '0';
   title.style.fontSize = '22px';
 
   const message = documentRef.createElement('p');
-  message.textContent = `启动阶段已记录（${code}）。可以重试一次；诊断只保存在本机且不会自动上传。`;
+  message.textContent = `The startup stage was recorded (${code}). You can retry once. Diagnostics remain on this device and are never uploaded automatically.`;
   message.style.margin = '0';
   message.style.maxWidth = '560px';
 
@@ -188,17 +219,22 @@ export function renderStartupRecovery(
 
   const retry = documentRef.createElement('button');
   retry.type = 'button';
-  retry.textContent = '重试启动';
+  retry.textContent = 'Retry startup';
   retry.addEventListener('click', onRetry);
 
   const clear = documentRef.createElement('button');
   clear.type = 'button';
-  clear.textContent = '清除启动诊断';
+  clear.textContent = 'Clear startup diagnostics';
   clear.addEventListener('click', () => {
     clear.disabled = true;
-    void onClearDiagnostics().finally(() => {
-      clear.textContent = '启动诊断已清除';
-    });
+    void onClearDiagnostics()
+      .then(() => {
+        clear.textContent = 'Startup diagnostics cleared';
+      })
+      .catch(() => {
+        clear.disabled = false;
+        clear.textContent = 'Clear failed. Try again.';
+      });
   });
 
   for (const button of [retry, clear]) {

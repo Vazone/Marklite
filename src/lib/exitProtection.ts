@@ -1,3 +1,5 @@
+import { t } from './i18n';
+
 export type DirtyExitDocument = {
   id: string;
   title: string;
@@ -76,7 +78,21 @@ export function createExitProtectionController(callbacks: ExitProtectionCallback
       }
 
       const dirtyDocuments = callbacks.getDirtyDocuments();
-      if (!dirtyDocuments.length) return false;
+      if (!dirtyDocuments.length) {
+        preventDefault();
+        phase = 'closing';
+        void callbacks.closeWindow().then(
+          () => {
+            phase = 'idle';
+            callbacks.onPromptChange(null);
+          },
+          (error) => {
+            phase = 'idle';
+            callbacks.onCloseError?.(error);
+          }
+        );
+        return true;
+      }
 
       preventDefault();
       promptDocuments = snapshotDocuments(dirtyDocuments);
@@ -95,14 +111,14 @@ export function createExitProtectionController(callbacks: ExitProtectionCallback
 
     async discardAndExit(): Promise<boolean> {
       if (phase !== 'prompt') return false;
-      return closeAfterDecision('正在退出…');
+      return closeAfterDecision(t('exit.exiting'));
     },
 
     async saveAndExit(): Promise<boolean> {
       if (phase !== 'prompt') return false;
 
       phase = 'saving';
-      publishPrompt(true, '正在保存未保存的文档…');
+      publishPrompt(true, t('exit.saving'));
       const targets = snapshotDocuments(callbacks.getDirtyDocuments());
 
       for (const target of targets) {
@@ -131,7 +147,7 @@ export function createExitProtectionController(callbacks: ExitProtectionCallback
         return false;
       }
 
-      return closeAfterDecision('正在退出…');
+      return closeAfterDecision(t('exit.exiting'));
     }
   };
 }

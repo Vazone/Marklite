@@ -8,21 +8,22 @@
     splitRatioFromClientX,
     type SplitDropMode
   } from '../../lib/splitPane';
+  import { createPointerResizeLifecycle, type PointerResizeLifecycle } from '../../lib/pointerResizeLifecycle';
+  import { translator } from '../../lib/i18n';
 
   export let ratio = 0.5;
-  export let onRatioChange: (ratio: number) => void = () => {};
-  export let onCommit: (rawRatio: number, visibleRatio: number) => void = () => {};
-  export let onCollapse: (mode: 'edit' | 'preview') => void = () => {};
+  export let onRatioChange: (ratio: number) => void;
+  export let onCommit: (rawRatio: number, visibleRatio: number) => void;
+  export let onCollapse: (mode: 'edit' | 'preview') => void;
 
   let separator: HTMLElement;
   let container: HTMLElement | null = null;
   let containerWidth = 0;
   let dragging = false;
-  let pointerId: number | null = null;
   let startRatio = ratio;
   let dropIntent: SplitDropMode = 'split';
-  let frame: number | null = null;
-  let pendingClientX: number | null = null;
+  let previewOffsetPx = 0;
+  let dragLifecycle: PointerResizeLifecycle;
   let resizeObserver: ResizeObserver | null = null;
   let mediaQuery: MediaQueryList | null = null;
 
@@ -30,9 +31,9 @@
   $: ariaValue = Math.round(ratio * 100);
   $: dropMessage =
     dropIntent === 'preview'
-      ? '释放后切换为预览'
+      ? $translator('split.releasePreview')
       : dropIntent === 'edit'
-        ? '释放后切换为编辑'
+        ? $translator('split.releaseEdit')
         : '';
 
   onMount(() => {
@@ -46,15 +47,26 @@
       resizeObserver = new ResizeObserver(measureContainer);
       resizeObserver.observe(container);
     }
+    dragLifecycle = createPointerResizeLifecycle({
+      element: separator,
+      bodyClass: 'split-pane-dragging',
+      onSample: previewPointer,
+      onStart: () => {
+        dragging = true;
+      },
+      onCommit: () => {
+        dragging = false;
+      },
+      onCancel: restoreStartRatio
+    });
   });
 
   onDestroy(() => {
-    cancelFrame();
+    dragLifecycle?.dispose();
     resizeObserver?.disconnect();
     mediaQuery?.removeEventListener('change', measureContainer);
     window.removeEventListener('resize', measureContainer);
     window.removeEventListener('blur', cancelActiveDrag);
-    endGlobalDragState();
   });
 
   function isNarrowViewport() {
@@ -80,86 +92,50 @@
   function handlePointerDown(event: PointerEvent) {
     if (event.button !== 0 || event.isPrimary === false || isNarrowViewport()) return;
     event.preventDefault();
-    dragging = true;
-    pointerId = event.pointerId;
     startRatio = ratio;
     dropIntent = 'split';
-    separator.setPointerCapture?.(event.pointerId);
-    document.body.classList.add('split-pane-dragging');
-    schedulePointer(event.clientX);
+    dragLifecycle.start(event);
+    dragLifecycle.schedule(event.clientX);
   }
 
   function handlePointerMove(event: PointerEvent) {
-    if (!dragging || event.pointerId !== pointerId) return;
+    if (!dragLifecycle.active || event.pointerId !== dragLifecycle.pointerId) return;
     event.preventDefault();
-    schedulePointer(event.clientX);
+    dragLifecycle.schedule(event.clientX);
   }
 
   function handlePointerUp(event: PointerEvent) {
-    if (!dragging || event.pointerId !== pointerId) return;
+    if (!dragLifecycle.active || event.pointerId !== dragLifecycle.pointerId) return;
     event.preventDefault();
-    cancelFrame();
     const { raw, visible } = pointerRatio(event.clientX);
-    onRatioChange(visible);
     onCommit(raw, visible);
+    previewOffsetPx = 0;
     dropIntent = 'split';
-    endPointerCapture(event.pointerId);
-    endGlobalDragState();
+    dragLifecycle.commit(event);
   }
 
   function handlePointerCancel(event: PointerEvent) {
-    if (!dragging || event.pointerId !== pointerId) return;
-    cancelFrame();
-    onRatioChange(startRatio);
-    dropIntent = 'split';
-    endPointerCapture(event.pointerId);
-    endGlobalDragState();
+    dragLifecycle.cancel(event);
   }
 
   function cancelActiveDrag() {
-    if (!dragging) return;
-    cancelFrame();
-    onRatioChange(startRatio);
-    dropIntent = 'split';
-    if (pointerId !== null) endPointerCapture(pointerId);
-    endGlobalDragState();
+    dragLifecycle?.cancelActive();
   }
 
   function handleLostPointerCapture(event: PointerEvent) {
-    if (!dragging || event.pointerId !== pointerId) return;
-    cancelFrame();
-    onRatioChange(startRatio);
-    dropIntent = 'split';
-    endGlobalDragState();
+    dragLifecycle.handleLostPointerCapture(event);
   }
 
-  function schedulePointer(clientX: number) {
-    pendingClientX = clientX;
-    if (frame !== null) return;
-    frame = requestAnimationFrame(() => {
-      frame = null;
-      if (pendingClientX === null || !dragging) return;
-      const { raw, visible } = pointerRatio(pendingClientX);
-      pendingClientX = null;
-      dropIntent = splitDropMode(raw);
-      onRatioChange(visible);
-    });
-  }
-
-  function cancelFrame() {
-    if (frame !== null) cancelAnimationFrame(frame);
-    frame = null;
-    pendingClientX = null;
-  }
-
-  function endPointerCapture(id: number) {
-    if (separator.hasPointerCapture?.(id)) separator.releasePointerCapture(id);
-  }
-
-  function endGlobalDragState() {
+  function restoreStartRatio() {
     dragging = false;
-    pointerId = null;
-    document.body.classList.remove('split-pane-dragging');
+    previewOffsetPx = 0;
+    dropIntent = 'split';
+  }
+
+  function previewPointer(clientX: number) {
+    const { raw, visible } = pointerRatio(clientX);
+    dropIntent = splitDropMode(raw);
+    previewOffsetPx = (visible - startRatio) * containerWidth;
   }
 
   function handleKeyDown(event: KeyboardEvent) {
@@ -194,8 +170,9 @@
   class:collapse-preview={dropIntent === 'preview'}
   class:collapse-edit={dropIntent === 'edit'}
   data-drop-intent={dropIntent}
+  style={`--split-preview-offset: ${previewOffsetPx}px`}
   role="separator"
-  aria-label="调整编辑器和预览宽度"
+  aria-label={$translator('split.resize')}
   aria-orientation="vertical"
   aria-valuemin={Math.round(bounds.min * 100)}
   aria-valuemax={Math.round(bounds.max * 100)}
@@ -234,6 +211,7 @@
     width: 1px;
     height: 100%;
     background: var(--border-color);
+    transform: translateX(var(--split-preview-offset));
     transition: width 120ms ease, background 120ms ease;
   }
 

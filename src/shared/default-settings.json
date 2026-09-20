@@ -1,4 +1,5 @@
 {
+  "language": "en",
   "theme": "system",
   "accentColor": "#0f8b8d",
   "editorFontFamily": "Cascadia Code, Consolas, monospace",
@@ -6,7 +7,6 @@
   "editorFontSize": 15,
   "previewFontSize": 16,
   "lineHeight": 1.65,
-  "interfaceScale": 1.0,
   "cornerRadius": 8,
   "showLineNumbers": true,
   "wordWrap": true,

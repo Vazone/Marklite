@@ -1,6 +1,6 @@
 {
   "name": "marklite",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "type": "module",
   "description": "A lightweight cross-platform Markdown editor built with Tauri, Rust, Svelte and CodeMirror.",
@@ -30,9 +30,23 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "vite build",
+    "build:cli": "node scripts/build-cli-launcher.mjs",
+    "build:diagram-pack": "node scripts/build-mermaid-pack.mjs",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:packaging": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-windows-packaging.ps1",
+    "test:startup-diagnostics": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-startup-diagnostics.ps1",
+    "test:cli": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-cli.ps1",
+    "audit:rust": "node scripts/audit-rust.mjs",
+    "benchmark:generate": "node scripts/performance/generate-corpus.mjs",
+    "benchmark:search": "node scripts/performance/measure-editor-search.mjs",
+    "benchmark:mind-map": "node --expose-gc scripts/performance/measure-mind-map.mjs",
+    "benchmark:windows": "node scripts/performance/run-windows-baseline.mjs",
     "version:check": "node scripts/check-version.mjs",
+    "conformance:markdown": "node scripts/markdown-conformance.mjs",
+    "conformance:diagrams": "node scripts/diagram-conformance.mjs",
     "package:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1",
     "tauri": "tauri"
   },
@@ -44,6 +58,7 @@
     "@codemirror/search": "^6.5.11",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.38.6",
+    "@lezer/markdown": "1.6.3",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-opener": "^2.5.4",
@@ -56,8 +71,11 @@
     "@tsconfig/svelte": "^5.0.5",
     "@types/node": "^25.0.0",
     "esbuild": "^0.28.2",
+    "jsdom": "^29.1.1",
+    "mermaid": "11.17.2",
     "svelte-check": "^4.3.4",
     "typescript": "^6.0.3",
-    "vite": "^8.2.1"
+    "vite": "^8.2.1",
+    "vitest": "4.1.11"
   }
 }

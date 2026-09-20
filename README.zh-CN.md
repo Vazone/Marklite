@@ -19,15 +19,16 @@
 </div>
 
 <p align="center">
-  <img src="assets/marklite-screenshot.png" alt="MarkLite 分栏编辑 Markdown 文档" width="100%" />
+  <img src="assets/marklite-showcase.gif" alt="MarkLite 分栏编辑、标题脑图、离线语法学习与统一导出" width="100%" />
 </p>
+<p align="center"><sub>分栏写作与预览 · 浏览标题脑图 · 离线学习 Markdown · 从一个入口完成导出</sub></p>
 
 ## 为什么选择 MarkLite？
 
 | | |
 | --- | --- |
 | **⚡ 打开就能写**<br>快速启动，在多个文档间流畅切换，Markdown 内容变长时依然保持顺畅。 | **🪶 安静的写作空间**<br>没有拥挤的项目面板，只保留文档、写作工具、预览和真正需要的信息。 |
-| **✍️ 完整的写作空间**<br>CodeMirror 6、多标签、查找替换、快捷键、格式工具和可恢复的编辑状态。 | **📦 统一导出入口**<br>把当前 Markdown 快照导出为独立 HTML、PDF 或可继续编辑的 DOCX。 |
+| **✍️ 完整的写作空间**<br>CodeMirror 6、多标签、查找替换、快捷键、格式工具和可恢复的编辑状态。 | **📦 统一导出入口**<br>把当前 Markdown 快照导出为独立 HTML、PDF、可继续编辑的 DOCX，或把标题脑图导出为 SVG。 |
 | **👀 理解本地文件的预览**<br>可拖动分栏、文内锚点、本地 Markdown 跳转、受控本地图片和外链确认。 | **🔒 默认本地优先**<br>文档始终是由你控制的普通文件；预览 HTML 进入界面前会经过清洗。 |
 
 ## 功能
@@ -42,35 +43,40 @@
 
 ### 预览与整理
 
-- 在编辑、预览和分栏三种布局之间切换。
+- 在编辑、预览和分栏三种布局之间切换；分栏双向滚动同步，快速连续滚轮保持预览位置稳定。
 - 拖动分栏线调整编辑区和预览区宽度，也可在边缘收纳为单栏。
 - 调整最近文件侧栏宽度、隐藏侧栏，并且无需重启即可重新展开。
 - 在不挤压编辑区的前提下浏览最近文件、文档大纲、文档统计和大量标签。
 - 按明确类型处理文内标题、本地 Markdown/文本文件和 HTTP/HTTPS 外链。
 - 开启本地图片后，可受控显示 PNG、JPEG、GIF 和 WebP 图片。
+- 把文档标题层级转换为彩色脑图，支持分支展开折叠、拖动画布和点击节点跳回编辑行。
+- 在完整离线指南中学习基础、扩展与脑图语法，无需打开外部教程。
 
 ### 导出与桌面工作流
 
-- 通过统一的**导出为…**入口生成独立 HTML、PDF 或可编辑 DOCX。
+- 通过统一的**导出为…**入口生成独立 HTML、PDF、可编辑 DOCX，完整展开的矢量脑图 SVG，或按章节输出 PNG 图片。
+- 每章导出一张 PNG，存入源文档旁的同名文件夹；未保存文档可选择目标父目录。
+- 导出显示真实阶段与章节/批次进度，支持图片导出取消；CLI 和 Windows 右键导出也显示处理进度。
+- 大文档预览按可见区域加载，PDF 分批生成并合并，减少长文章渲染和导出的内存压力。
 - 导出任务冻结文档快照；选择保存位置期间继续编辑或切换标签也不会改变已经开始的导出内容。
 - 支持浅色、深色和跟随系统主题，并可调整强调色、编辑器字体、预览延迟、自动保存、侧栏和状态栏。
 - 支持把文件拖入窗口，或通过操作系统参数与第二实例打开文件。
 - 关闭脏文档或退出程序时，可选择保存、不保存或取消。
-- Windows NSIS 安装器可选添加 **Open with MarkLite** 和 Markdown 文件关联。
+- Windows NSIS 安装器可选添加 **Open with MarkLite**、Markdown 文件关联及 PDF/Word/HTML 转换菜单。
 
 ## 下载
 
-当前公开构建为 **MarkLite v0.1.5 Pre-release**。
+**MarkLite v0.1.6** · Windows、macOS 与 Linux。安装包和更新说明统一通过 GitHub Releases 提供。
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows x64 | [`MarkLite_0.1.5_x64-setup.exe`](https://github.com/Vazone/Marklite/releases/download/v0.1.5/MarkLite_0.1.5_x64-setup.exe) |
-| macOS Apple Silicon | [`MarkLite_0.1.5_macos_aarch64.dmg`](https://github.com/Vazone/Marklite/releases/download/v0.1.5/MarkLite_0.1.5_macos_aarch64.dmg) |
-| macOS Intel | [`MarkLite_0.1.5_macos_x86_64.dmg`](https://github.com/Vazone/Marklite/releases/download/v0.1.5/MarkLite_0.1.5_macos_x86_64.dmg) |
-| Linux x64 AppImage | [`MarkLite_0.1.5_linux_x86_64.AppImage`](https://github.com/Vazone/Marklite/releases/download/v0.1.5/MarkLite_0.1.5_linux_x86_64.AppImage) |
-| Linux amd64 Debian | [`MarkLite_0.1.5_linux_amd64.deb`](https://github.com/Vazone/Marklite/releases/download/v0.1.5/MarkLite_0.1.5_linux_amd64.deb) |
+| Windows x64 | [`MarkLite_0.1.6_x64-setup.exe`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/MarkLite_0.1.6_x64-setup.exe) |
+| macOS Apple Silicon | [`MarkLite_0.1.6_macos_aarch64.dmg`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/MarkLite_0.1.6_macos_aarch64.dmg) |
+| macOS Intel | [`MarkLite_0.1.6_macos_x86_64.dmg`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/MarkLite_0.1.6_macos_x86_64.dmg) |
+| Linux x64 AppImage | [`MarkLite_0.1.6_linux_x86_64.AppImage`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/MarkLite_0.1.6_linux_x86_64.AppImage) |
+| Linux amd64 Debian | [`MarkLite_0.1.6_linux_amd64.deb`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/MarkLite_0.1.6_linux_amd64.deb) |
 
-请使用 [`SHA256SUMS.txt`](https://github.com/Vazone/Marklite/releases/download/v0.1.5/SHA256SUMS.txt) 核验下载文件，完整更新内容见 [v0.1.5 Release](https://github.com/Vazone/Marklite/releases/tag/v0.1.5)。
+请使用 [`SHA256SUMS.txt`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/SHA256SUMS.txt) 核验下载文件，完整更新内容见 [v0.1.6 Release](https://github.com/Vazone/Marklite/releases/tag/v0.1.6)。
 
 ## 技术架构
 
@@ -119,11 +125,11 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked --all-features
 npm run package:windows
 ```
 
-版本 tag 会触发 GitHub Actions，在原生 runner 上构建 Windows x64、Linux x64、macOS Apple Silicon 和 macOS Intel 安装包；所有平台任务成功后才发布 Release。
+各平台安装包通过 GitHub Actions 构建；Windows、Linux 和 macOS 两种架构的构建全部完成后，再发布 Release 资产。
 
 ## 参与贡献
 
-欢迎提交 Issue 和 Pull Request。提出修改前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。如需报告敏感安全问题，请先通过[维护者主页](https://github.com/Vazone)联系，不要直接在公开 Issue 中披露细节。
+欢迎提交 Issue 和 Pull Request。提出修改时请提供复现步骤和相关测试。如需报告敏感安全问题，请先通过[维护者主页](https://github.com/Vazone)联系，不要直接在公开 Issue 中披露细节。
 
 ## 许可证
 

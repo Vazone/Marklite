@@ -16,6 +16,8 @@ import {
   Table,
   TextCursorInput
 } from 'lucide-svelte';
+import { shortcutFor, type CommandId } from './commands';
+import type { MessageKey } from './i18n/messages';
 export type ToolbarAction =
   | 'bold'
   | 'italic'
@@ -36,26 +38,27 @@ export type ToolbarAction =
 
 export type ToolbarItem = {
   action: ToolbarAction;
-  label: string;
+  labelKey: MessageKey;
   shortcut?: string;
   icon: typeof Bold;
+  commandId?: CommandId;
 };
 
 export const toolbarItems: ToolbarItem[] = [
-  { action: 'bold', label: '加粗', shortcut: 'Ctrl+B', icon: Bold },
-  { action: 'italic', label: '斜体', shortcut: 'Ctrl+I', icon: Italic },
-  { action: 'strike', label: '删除线', icon: Strikethrough },
-  { action: 'h1', label: '一级标题', icon: Heading1 },
-  { action: 'h2', label: '二级标题', icon: Heading2 },
-  { action: 'h3', label: '三级标题', icon: Heading3 },
-  { action: 'quote', label: '引用', icon: Quote },
-  { action: 'codeBlock', label: '代码块', icon: Code },
-  { action: 'inlineCode', label: '行内代码', icon: TextCursorInput },
-  { action: 'unorderedList', label: '无序列表', icon: List },
-  { action: 'orderedList', label: '有序列表', icon: ListOrdered },
-  { action: 'taskList', label: '任务列表', icon: ListChecks },
-  { action: 'link', label: '插入链接', shortcut: 'Ctrl+K', icon: Link },
-  { action: 'image', label: '插入图片', icon: Image },
-  { action: 'table', label: '插入表格', icon: Table },
-  { action: 'hr', label: '水平分割线', icon: Minus }
+  { action: 'bold', labelKey: 'toolbar.bold', shortcut: shortcutFor('format-bold'), commandId: 'format-bold', icon: Bold },
+  { action: 'italic', labelKey: 'toolbar.italic', shortcut: shortcutFor('format-italic'), commandId: 'format-italic', icon: Italic },
+  { action: 'strike', labelKey: 'toolbar.strike', icon: Strikethrough },
+  { action: 'h1', labelKey: 'toolbar.h1', icon: Heading1 },
+  { action: 'h2', labelKey: 'toolbar.h2', icon: Heading2 },
+  { action: 'h3', labelKey: 'toolbar.h3', icon: Heading3 },
+  { action: 'quote', labelKey: 'toolbar.quote', icon: Quote },
+  { action: 'codeBlock', labelKey: 'toolbar.codeBlock', icon: Code },
+  { action: 'inlineCode', labelKey: 'toolbar.inlineCode', icon: TextCursorInput },
+  { action: 'unorderedList', labelKey: 'toolbar.unorderedList', icon: List },
+  { action: 'orderedList', labelKey: 'toolbar.orderedList', icon: ListOrdered },
+  { action: 'taskList', labelKey: 'toolbar.taskList', icon: ListChecks },
+  { action: 'link', labelKey: 'toolbar.link', shortcut: shortcutFor('insert-link'), commandId: 'insert-link', icon: Link },
+  { action: 'image', labelKey: 'toolbar.image', icon: Image },
+  { action: 'table', labelKey: 'toolbar.table', icon: Table },
+  { action: 'hr', labelKey: 'toolbar.hr', icon: Minus }
 ];

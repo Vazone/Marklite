@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { tick } from 'svelte';
   import {
     defaultExportOptions
   } from '../../lib/documentExport';
@@ -10,28 +9,22 @@
     ExportOrientation,
     ExportPaperSize
   } from '../../lib/tauriApi';
+  import ExportProgress from './ExportProgress.svelte';
+  import type { ExportProgressView } from '../../lib/exportProgress';
+  import ModalShell from './ModalShell.svelte';
+  import { translator } from '../../lib/i18n';
 
   export let open = false;
+  export let progress: ExportProgressView | null = null;
   export let busy = false;
   export let documentTitle = '';
-  export let onExport: (format: ExportFormat, options: ExportOptions) => void = () => {};
-  export let onClose: () => void = () => {};
+  export let onCancel: (() => void) | undefined = undefined;
+  export let cancelRequested = false;
+  export let onExport: (format: ExportFormat, options: ExportOptions) => void;
+  export let onClose: () => void;
 
-  let dialog: HTMLElement;
   let format: ExportFormat = 'html';
   let options: ExportOptions = { ...defaultExportOptions };
-  let wasOpen = false;
-
-  $: if (open && !wasOpen) {
-    wasOpen = true;
-    void tick().then(() => dialog?.querySelector<HTMLElement>('select, input, button')?.focus());
-  } else if (!open) {
-    wasOpen = false;
-  }
-
-  function closeIfAllowed(): void {
-    if (!busy) onClose();
-  }
 
   function update<K extends keyof ExportOptions>(key: K, value: ExportOptions[K]): void {
     options = { ...options, [key]: value };
@@ -42,68 +35,36 @@
     if (!busy) onExport(format, { ...options });
   }
 
-  function handleKeydown(event: KeyboardEvent): void {
-    event.stopPropagation();
-    if (event.key === 'Escape' && !busy) {
-      event.preventDefault();
-      onClose();
-      return;
-    }
-    if (event.key !== 'Tab' || !dialog) return;
-    const focusable = Array.from(
-      dialog.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex="0"]'
-      )
-    );
-    if (!focusable.length) return;
-    const first = focusable[0];
-    const last = focusable.at(-1)!;
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
 </script>
 
 {#if open}
-  <div class="modal-backdrop" role="presentation" on:click={closeIfAllowed}>
-    <div
-      bind:this={dialog}
-      class="export-dialog"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="export-dialog-title"
-      aria-busy={busy}
-      tabindex="-1"
-      on:click|stopPropagation
-      on:keydown={handleKeydown}
-    >
+  <ModalShell {busy} dialogClass="export-dialog" labelledBy="export-dialog-title" {onClose}>
       <header class="dialog-header">
         <div>
-          <h2 id="export-dialog-title">导出为</h2>
-          <p title={documentTitle}>{documentTitle || '当前文档'}</p>
+          <h2 id="export-dialog-title">{$translator('export.title')}</h2>
+          <p title={documentTitle}>{documentTitle || $translator('export.currentDocument')}</p>
         </div>
-        <button type="button" class="ghost-button" disabled={busy} on:click={onClose}>关闭</button>
+        <button type="button" class="ghost-button" disabled={busy} on:click={onClose}>{$translator('common.close')}</button>
       </header>
 
       <form on:submit={handleSubmit}>
         <div class="export-dialog-body">
+          {#if busy && progress}<ExportProgress {progress} />{/if}
           <label>
-            <span>文件格式</span>
+            <span>{$translator('export.fileFormat')}</span>
             <select bind:value={format} disabled={busy}>
-              <option value="html">HTML 网页</option>
-              <option value="pdf">PDF 文档</option>
-              <option value="docx">Word 文档（DOCX）</option>
+              <option value="html">{$translator('export.format.html')}</option>
+              <option value="pdf">{$translator('export.format.pdf')}</option>
+              <option value="docx">{$translator('export.format.docx')}</option>
+              <option value="png">{$translator('export.format.png')}</option>
+              <option value="svg">{$translator('export.format.svg')}</option>
             </select>
           </label>
 
-          {#if format !== 'html'}
+          {#if format === 'pdf' || format === 'docx'}
             <div class="export-grid">
               <label>
-                <span>纸张</span>
+                <span>{$translator('export.paper')}</span>
                 <select
                   value={options.paperSize}
                   disabled={busy}
@@ -114,67 +75,75 @@
                 </select>
               </label>
               <label>
-                <span>方向</span>
+                <span>{$translator('export.orientation')}</span>
                 <select
                   value={options.orientation}
                   disabled={busy}
                   on:change={(event) => update('orientation', event.currentTarget.value as ExportOrientation)}
                 >
-                  <option value="portrait">纵向</option>
-                  <option value="landscape">横向</option>
+                  <option value="portrait">{$translator('export.orientation.portrait')}</option>
+                  <option value="landscape">{$translator('export.orientation.landscape')}</option>
                 </select>
               </label>
               <label>
-                <span>页边距</span>
+                <span>{$translator('export.margin')}</span>
                 <select
                   value={options.margin}
                   disabled={busy}
                   on:change={(event) => update('margin', event.currentTarget.value as ExportMarginPreset)}
                 >
-                  <option value="narrow">窄</option>
-                  <option value="normal">普通</option>
-                  <option value="wide">宽</option>
+                  <option value="narrow">{$translator('export.margin.narrow')}</option>
+                  <option value="normal">{$translator('export.margin.normal')}</option>
+                  <option value="wide">{$translator('export.margin.wide')}</option>
                 </select>
               </label>
             </div>
           {/if}
 
-          <label class="switch-row">
-            <span>包含文档标题</span>
-            <input
-              type="checkbox"
-              checked={options.includeTitle}
-              disabled={busy}
-              on:change={(event) => update('includeTitle', event.currentTarget.checked)}
-            />
-          </label>
-          <label class="switch-row">
-            <span>嵌入本地图片（仅本次导出）</span>
-            <input
-              type="checkbox"
-              checked={options.includeLocalImages}
-              disabled={busy}
-              on:change={(event) => update('includeLocalImages', event.currentTarget.checked)}
-            />
-          </label>
-          <p class="export-note">
-            不会下载网络图片。本地图片只会在你明确勾选后读取；缺失或不支持的内容会以警告方式降级。
-          </p>
+          {#if format === 'png'}
+            <p class="export-note">{$translator('export.pngNote')}</p>
+          {/if}
+          {#if format === 'svg'}
+            <p class="export-note">
+              {$translator('export.svgNote')}
+            </p>
+          {:else}
+            <label class="switch-row">
+              <span>{$translator('export.includeTitle')}</span>
+              <input
+                type="checkbox"
+                checked={options.includeTitle}
+                disabled={busy}
+                on:change={(event) => update('includeTitle', event.currentTarget.checked)}
+              />
+            </label>
+            <label class="switch-row">
+              <span>{$translator('export.includeImages')}</span>
+              <input
+                type="checkbox"
+                checked={options.includeLocalImages}
+                disabled={busy}
+                on:change={(event) => update('includeLocalImages', event.currentTarget.checked)}
+              />
+            </label>
+            <p class="export-note">
+              {$translator('export.resourceNote')}
+            </p>
+          {/if}
         </div>
 
         <footer class="dialog-footer">
-          <button type="button" class="ghost-button" disabled={busy} on:click={onClose}>取消</button>
+          <button type="button" class="ghost-button" disabled={busy && (!onCancel || format !== 'png' || cancelRequested)} on:click={() => busy ? onCancel?.() : onClose()}>{$translator(cancelRequested ? 'export.cancelling' : 'common.cancel')}</button>
           <button type="submit" class="primary-button" disabled={busy}>
-            {busy ? '正在导出…' : '选择位置并导出'}
+            {busy ? $translator('export.exporting') : $translator(format === 'png' ? 'export.exportImages' : 'export.chooseTarget')}
           </button>
         </footer>
       </form>
-    </div>
-  </div>
+  </ModalShell>
 {/if}
 
 <style>
-  .export-dialog {
+  :global(.export-dialog) {
     width: min(560px, calc(100vw - 32px));
     overflow: hidden;
     border: 1px solid var(--border-color);

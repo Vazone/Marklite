@@ -4,7 +4,15 @@
 
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
-  import { Compartment, EditorSelection, EditorState, RangeSetBuilder, StateEffect, StateField } from '@codemirror/state';
+  import {
+    Compartment,
+    EditorSelection,
+    EditorState,
+    RangeSetBuilder,
+    StateEffect,
+    StateField,
+    type Text
+  } from '@codemirror/state';
   import {
     Decoration,
     type DecorationSet,
@@ -27,24 +35,31 @@
     indentUnit,
     syntaxHighlighting
   } from '@codemirror/language';
-  import { markdown } from '@codemirror/lang-markdown';
-  import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+  import { defaultKeymap, history, historyKeymap, indentWithTab, isolateHistory } from '@codemirror/commands';
   import { highlightSelectionMatches } from '@codemirror/search';
   import { ChevronDown, ChevronRight, ChevronUp, Replace, ReplaceAll, Search, X } from 'lucide-svelte';
   import { api, type AppSettings } from '../../lib/tauriApi';
   import type { CursorPosition, EditorScrollPosition } from '../../app/stores/documentStore';
   import type { ToolbarAction } from '../../lib/markdownToolbar';
+  import { t, translator } from '../../lib/i18n';
   import {
+    createEditorSessionSnapshotController,
     createEditorState,
-    serializeEditorState,
     type SerializedEditorState
   } from '../../lib/editorSession';
   import { startupElapsedMs } from '../../lib/startupLifecycle';
-
-  type SearchMatch = {
-    from: number;
-    to: number;
-  };
+  import { codeMirrorShortcutFor } from '../../lib/commands';
+  import { formatCodeBlock, formatInlineCode, formatLines } from '../../lib/editorFormatting';
+  import { editorMarkdownLanguage } from '../../lib/editorMarkdownLanguage';
+  import {
+    editorSearchReplacementChange,
+    editorSearchMatchAtPosition,
+    findEditorSearchMatches,
+    firstEditorSearchMatchAtOrAfter,
+    updateEditorSearchMatches,
+    visibleEditorSearchMatches,
+    type EditorSearchMatch
+  } from '../../lib/editorSearch';
 
   const setSearchDecorations = StateEffect.define<DecorationSet>();
   const searchDecorations = StateField.define<DecorationSet>({
@@ -65,10 +80,11 @@
   export let settings: AppSettings;
   export let serializedState: SerializedEditorState | null = null;
   export let initialScrollPosition: EditorScrollPosition;
-  export let onChange: (tabId: string, value: string) => void = () => {};
-  export let onCursorChange: (tabId: string, position: CursorPosition) => void = () => {};
-  export let onScrollSync: (tabId: string, position: EditorScrollPosition) => void = () => {};
-  export let onSessionChange: (tabId: string, state: SerializedEditorState) => void = () => {};
+  export let onChange: (tabId: string, value: string, lineCount: number) => void;
+  export let onDirty: (tabId: string) => void;
+  export let onCursorChange: (tabId: string, position: CursorPosition) => void;
+  export let onScrollSync: (tabId: string, position: EditorScrollPosition, userInitiated: boolean) => void;
+  export let onSessionChange: (tabId: string, state: SerializedEditorState) => void;
 
   let host: HTMLDivElement;
   let view: EditorView | null = null;
@@ -80,15 +96,21 @@
   let replaceValue = '';
   let searchInput: HTMLInputElement | null = null;
   let replaceInput: HTMLInputElement | null = null;
-  let searchMatches: SearchMatch[] = [];
+  let searchMatches: EditorSearchMatch[] = [];
   let activeMatchIndex = -1;
   let scrollFrame = 0;
   let removeScrollListener: (() => void) | null = null;
+  let userEditorScrollUntil = 0;
+  let contentSnapshotTimer = 0;
+  let pendingDocument: Text | null = null;
+  let applyingExternalValue = false;
   let editorMountFailed = false;
   const editorMountStartedAt = performance.now();
   const recordStartupEditorMount = !editorStartupMountReported;
   editorStartupMountReported = true;
   const optionsCompartment = new Compartment();
+  const keymapCompartment = new Compartment();
+  const sessionSnapshots = createEditorSessionSnapshotController((state) => onSessionChange(tabId, state));
 
   $: matchCounter = searchQuery ? `${searchMatches.length ? activeMatchIndex + 1 : 0}/${searchMatches.length}` : '0/0';
   $: canReplace = searchQuery.trim().length > 0 && searchMatches.length > 0;
@@ -103,7 +125,8 @@
     try {
       const extensions = [
         history(),
-        markdown(),
+        EditorState.allowMultipleSelections.of(true),
+        editorMarkdownLanguage(),
         indentOnInput(),
         bracketMatching(),
         drawSelection(),
@@ -113,17 +136,7 @@
         searchDecorations,
         foldGutter(),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-        keymap.of([
-          { key: 'Mod-b', run: () => runToolbar('bold') },
-          { key: 'Mod-i', run: () => runToolbar('italic') },
-          { key: 'Mod-k', run: () => runToolbar('link') },
-          { key: 'Mod-f', run: () => openFindFromKeymap() },
-          { key: 'Mod-h', run: () => openReplaceFromKeymap() },
-          ...defaultKeymap,
-          ...historyKeymap,
-          ...foldKeymap,
-          ...(settings.insertSpaces ? [] : [indentWithTab])
-        ]),
+        keymapCompartment.of(keymap.of(editorKeymap())),
         EditorView.updateListener.of(handleUpdate),
         optionsCompartment.of(optionExtensions())
       ];
@@ -134,7 +147,21 @@
       });
       view = createdView;
       createdView.scrollDOM.addEventListener('scroll', scheduleScrollSync, { passive: true });
-      removeScrollListener = () => createdView.scrollDOM.removeEventListener('scroll', scheduleScrollSync);
+      const markUserScroll = () => { userEditorScrollUntil = performance.now() + 500; };
+      const markDragScroll = (event: PointerEvent) => { if (event.buttons) markUserScroll(); };
+      createdView.scrollDOM.addEventListener('wheel', markUserScroll, { passive: true });
+      createdView.scrollDOM.addEventListener('pointerdown', markUserScroll, { passive: true });
+      createdView.scrollDOM.addEventListener('pointermove', markDragScroll, { passive: true });
+      createdView.scrollDOM.addEventListener('touchstart', markUserScroll, { passive: true });
+      createdView.scrollDOM.addEventListener('keydown', markUserScroll);
+      removeScrollListener = () => {
+        createdView.scrollDOM.removeEventListener('scroll', scheduleScrollSync);
+        createdView.scrollDOM.removeEventListener('wheel', markUserScroll);
+        createdView.scrollDOM.removeEventListener('pointerdown', markUserScroll);
+        createdView.scrollDOM.removeEventListener('pointermove', markDragScroll);
+        createdView.scrollDOM.removeEventListener('touchstart', markUserScroll);
+        createdView.scrollDOM.removeEventListener('keydown', markUserScroll);
+      };
       restoreScrollPosition();
       lastSettingsSignature = settingsSignature(settings);
       editorMountFailed = false;
@@ -160,12 +187,19 @@
 
   function cleanupEditorView(persist: boolean) {
     if (persist && view) {
-      onSessionChange(tabId, serializeEditorState(view.state));
+      flushContent();
+      sessionSnapshots.flush(view.state);
+      emitScrollPosition(false);
+    } else {
+      sessionSnapshots.cancel();
     }
     removeScrollListener?.();
     removeScrollListener = null;
     if (scrollFrame) window.cancelAnimationFrame(scrollFrame);
     scrollFrame = 0;
+    if (contentSnapshotTimer) window.clearTimeout(contentSnapshotTimer);
+    contentSnapshotTimer = 0;
+    pendingDocument = null;
     view?.destroy();
     view = null;
   }
@@ -174,29 +208,39 @@
     cleanupEditorView(true);
   });
 
-  $: if (view && value !== lastExternalValue && value !== view.state.doc.toString()) {
+  $: if (view && value !== lastExternalValue) {
+    if (contentSnapshotTimer) window.clearTimeout(contentSnapshotTimer);
+    contentSnapshotTimer = 0;
+    pendingDocument = null;
+    applyingExternalValue = true;
     const transaction = view.state.update({
       changes: { from: 0, to: view.state.doc.length, insert: value }
     });
     view.dispatch(transaction);
+    applyingExternalValue = false;
     lastExternalValue = value;
   }
 
   $: if (view && settingsSignature(settings) !== lastSettingsSignature) {
     view.dispatch({
-      effects: optionsCompartment.reconfigure(optionExtensions())
+      effects: [
+        optionsCompartment.reconfigure(optionExtensions()),
+        keymapCompartment.reconfigure(keymap.of(editorKeymap()))
+      ]
     });
     lastSettingsSignature = settingsSignature(settings);
   }
 
   function handleUpdate(update: ViewUpdate) {
     if (update.docChanged) {
-      const next = update.state.doc.toString();
-      lastExternalValue = next;
-      onChange(tabId, next);
+      if (!applyingExternalValue) {
+        onDirty(tabId);
+        scheduleContentSnapshot(update.state.doc);
+      }
 
       if (searchOpen) {
-        refreshSearchMatches({ keepActiveNearSelection: true, selectActive: false });
+        searchMatches = updateEditorSearchMatches(update.state.doc, searchQuery, searchMatches, update.changes);
+        refreshSearchState({ keepActiveNearSelection: true, selectActive: false });
       }
 
       scheduleScrollSync();
@@ -211,35 +255,58 @@
       });
     }
 
-    if (update.docChanged || update.selectionSet) {
-      onSessionChange(tabId, serializeEditorState(update.state));
-    }
+    if (update.docChanged || update.selectionSet) sessionSnapshots.request(update.state);
+    if (searchOpen && update.viewportChanged && !update.docChanged) updateSearchDecorations();
+  }
+
+  function scheduleContentSnapshot(document: Text) {
+    pendingDocument = document;
+    if (contentSnapshotTimer) window.clearTimeout(contentSnapshotTimer);
+    contentSnapshotTimer = window.setTimeout(flushContent, 100);
+  }
+
+  export function flushContent() {
+    if (contentSnapshotTimer) window.clearTimeout(contentSnapshotTimer);
+    contentSnapshotTimer = 0;
+    const document = pendingDocument;
+    pendingDocument = null;
+    if (!document) return;
+    const next = document.toString();
+    lastExternalValue = next;
+    onChange(tabId, next, document.lines);
   }
 
   function scheduleScrollSync() {
+    if (!settings.syncScroll) return;
     if (scrollFrame) return;
     scrollFrame = window.requestAnimationFrame(() => {
       scrollFrame = 0;
-      emitScrollSync();
+      emitScrollPosition(true);
     });
   }
 
-  function emitScrollSync() {
+  function emitScrollPosition(measureVisibleLine: boolean) {
     if (!view) return;
     const scroller = view.scrollDOM;
     const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
     const ratio = maxScroll > 0 ? scroller.scrollTop / maxScroll : 0;
-    const lineBlock = view.lineBlockAtHeight(scroller.scrollTop + 1);
-    const line = view.state.doc.lineAt(lineBlock.from).number;
+    const documentY = Math.max(0, scroller.getBoundingClientRect().top - view.documentTop + 1);
+    const block = measureVisibleLine ? view.lineBlockAtHeight(documentY) : null;
+    const blockProgress = block?.height ? Math.min(1, Math.max(0, (documentY - block.top) / block.height)) : 0;
+    const offsetUtf16 = block
+      ? Math.min(view.state.doc.length, block.from + Math.round(block.length * blockProgress))
+      : view.state.selection.main.head;
+    const line = view.state.doc.lineAt(offsetUtf16).number;
 
     onScrollSync(tabId, {
       line,
+      offsetUtf16,
       ratio: Math.min(1, Math.max(0, ratio)),
       totalLines: view.state.doc.lines,
       scrollTop: scroller.scrollTop,
       scrollHeight: scroller.scrollHeight,
       clientHeight: scroller.clientHeight
-    });
+    }, performance.now() < userEditorScrollUntil);
   }
 
   function restoreScrollPosition() {
@@ -251,7 +318,7 @@
       const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
       const ratio = Math.min(1, Math.max(0, initialScrollPosition?.ratio ?? 0));
       scroller.scrollTop = maxScroll > 0 ? ratio * maxScroll : Math.max(0, initialScrollPosition?.scrollTop ?? 0);
-      emitScrollSync();
+      if (settings.syncScroll) emitScrollPosition(true);
     });
   }
 
@@ -317,6 +384,20 @@
     ];
   }
 
+  function editorKeymap() {
+    return [
+      { key: codeMirrorShortcutFor('format-bold'), run: () => runToolbar('bold') },
+      { key: codeMirrorShortcutFor('format-italic'), run: () => runToolbar('italic') },
+      { key: codeMirrorShortcutFor('insert-link'), run: () => runToolbar('link') },
+      { key: codeMirrorShortcutFor('find'), run: () => openFindFromKeymap() },
+      { key: codeMirrorShortcutFor('replace'), run: () => openReplaceFromKeymap() },
+      ...defaultKeymap,
+      ...historyKeymap,
+      ...foldKeymap,
+      ...(settings.insertSpaces ? [] : [indentWithTab])
+    ];
+  }
+
   function settingsSignature(next: AppSettings): string {
     return [
       next.showLineNumbers,
@@ -339,58 +420,42 @@
 
     switch (action) {
       case 'bold':
-        wrapSelection('**', '**', '加粗文本');
+        wrapSelection('**', '**', t('editor.insert.bold'));
         break;
       case 'italic':
-        wrapSelection('*', '*', '斜体文本');
+        wrapSelection('*', '*', t('editor.insert.italic'));
         break;
       case 'strike':
-        wrapSelection('~~', '~~', '删除线文本');
+        wrapSelection('~~', '~~', t('editor.insert.strike'));
         break;
       case 'inlineCode':
-        wrapSelection('`', '`', 'code');
+        dispatchFormatting(formatInlineCode(view.state));
         break;
       case 'h1':
-        prefixCurrentLine('# ');
-        break;
       case 'h2':
-        prefixCurrentLine('## ');
-        break;
       case 'h3':
-        prefixCurrentLine('### ');
-        break;
       case 'quote':
-        prefixCurrentLine('> ');
-        break;
       case 'unorderedList':
-        prefixCurrentLine('- ');
-        break;
       case 'orderedList':
-        prefixCurrentLine('1. ');
-        break;
       case 'taskList':
-        prefixCurrentLine('- [ ] ');
+        dispatchFormatting(formatLines(view.state, action));
         break;
       case 'link':
-        wrapSelection('[', '](https://example.com)', '链接文本');
+        wrapSelection('[', '](https://example.com)', t('editor.insert.link'));
         break;
       case 'image':
-        insertBlock('![图片描述](./image.png)');
+        insertBlock(t('editor.insert.image'));
         break;
       case 'codeBlock':
-        wrapBlock('```\n', '\n```', 'code');
+        dispatchFormatting(formatCodeBlock(view.state));
         break;
       case 'table':
-        insertBlock('| 列 A | 列 B |\n| --- | --- |\n| 内容 | 内容 |');
+        insertBlock(t('editor.insert.table'));
         break;
       case 'hr':
         insertBlock('---');
         break;
     }
-  }
-
-  export function focusEditor() {
-    view?.focus();
   }
 
   export function openFind() {
@@ -509,7 +574,6 @@
       selection: EditorSelection.cursor(nextSearchAnchor)
     });
 
-    searchMatches = findSearchMatches(view.state.doc.toString(), searchQuery);
     if (!searchMatches.length) {
       activeMatchIndex = -1;
       updateSearchDecorations();
@@ -524,14 +588,14 @@
   function replaceAllMatches() {
     if (!view || !canReplace) return;
 
-    const matches = [...searchMatches];
-    const anchor = matches[0]?.from ?? 0;
+    const anchor = searchMatches[0]?.from ?? 0;
+    const replacementChange = editorSearchReplacementChange(view.state.doc, searchMatches, replaceValue);
+    if (!replacementChange) return;
     view.dispatch({
-      changes: matches.map((match) => ({ from: match.from, to: match.to, insert: replaceValue })),
+      changes: replacementChange,
       selection: EditorSelection.cursor(anchor + replaceValue.length)
     });
 
-    searchMatches = findSearchMatches(view.state.doc.toString(), searchQuery);
     activeMatchIndex = searchMatches.length ? firstMatchIndexAtOrAfter(anchor + replaceValue.length) : -1;
 
     if (searchMatches.length) {
@@ -544,7 +608,12 @@
 
   function refreshSearchMatches(options: { keepActiveNearSelection?: boolean; selectActive?: boolean } = {}) {
     if (!view) return;
-    searchMatches = findSearchMatches(view.state.doc.toString(), searchQuery);
+    searchMatches = findEditorSearchMatches(view.state.doc, searchQuery);
+    refreshSearchState(options);
+  }
+
+  function refreshSearchState(options: { keepActiveNearSelection?: boolean; selectActive?: boolean } = {}) {
+    if (!view) return;
 
     if (!searchMatches.length) {
       activeMatchIndex = -1;
@@ -554,7 +623,7 @@
 
     if (options.keepActiveNearSelection) {
       const head = view.state.selection.main.head;
-      const nearIndex = searchMatches.findIndex((match) => match.from <= head && head <= match.to);
+      const nearIndex = editorSearchMatchAtPosition(searchMatches, head);
       if (nearIndex >= 0) {
         activeMatchIndex = nearIndex;
       } else if (activeMatchIndex >= searchMatches.length || activeMatchIndex < 0) {
@@ -572,29 +641,8 @@
     updateSearchDecorations();
   }
 
-  function findSearchMatches(content: string, query: string): SearchMatch[] {
-    const needle = query.trim();
-    if (!needle) return [];
-
-    const matches: SearchMatch[] = [];
-    const haystack = content.toLocaleLowerCase();
-    const normalizedNeedle = needle.toLocaleLowerCase();
-    let from = 0;
-
-    while (from <= haystack.length) {
-      const index = haystack.indexOf(normalizedNeedle, from);
-      if (index < 0) break;
-      matches.push({ from: index, to: index + needle.length });
-      from = index + Math.max(needle.length, 1);
-    }
-
-    return matches;
-  }
-
   function firstMatchIndexAtOrAfter(position: number): number {
-    if (!searchMatches.length) return -1;
-    const index = searchMatches.findIndex((match) => match.from >= position);
-    return index >= 0 ? index : 0;
+    return firstEditorSearchMatchAtOrAfter(searchMatches, position);
   }
 
   function selectActiveMatch(focusTarget: 'search' | 'replace' = 'search') {
@@ -632,7 +680,11 @@
     if (!searchMatches.length) return Decoration.none;
 
     const builder = new RangeSetBuilder<Decoration>();
-    for (const [index, match] of searchMatches.entries()) {
+    for (const { index, match } of visibleEditorSearchMatches(
+      searchMatches,
+      view?.visibleRanges ?? [],
+      activeMatchIndex
+    )) {
       builder.add(
         match.from,
         match.to,
@@ -654,6 +706,13 @@
     view.focus();
   }
 
+  export function scrollToLine(lineNumber: number) {
+    if (!view) return;
+    userEditorScrollUntil = 0;
+    const line = view.state.doc.line(Math.min(Math.max(1, lineNumber), view.state.doc.lines));
+    view.dispatch({ effects: EditorView.scrollIntoView(line.from, { y: 'start' }) });
+  }
+
   function wrapSelection(prefix: string, suffix: string, placeholder: string) {
     if (!view) return;
     const selection = view.state.selection.main;
@@ -665,39 +724,15 @@
 
     view.dispatch({
       changes: { from: selection.from, to: selection.to, insert },
-      selection: EditorSelection.range(anchor, head)
+      selection: EditorSelection.range(anchor, head),
+      annotations: isolateHistory.of('full')
     });
     view.focus();
   }
 
-  function wrapBlock(prefix: string, suffix: string, placeholder: string) {
-    if (!view) return;
-    const selection = view.state.selection.main;
-    const selected = view.state.sliceDoc(selection.from, selection.to);
-    const body = selected || placeholder;
-    const insert = `${prefix}${body}${suffix}`;
-    const anchor = selection.from + prefix.length;
-    const head = anchor + body.length;
-
-    view.dispatch({
-      changes: { from: selection.from, to: selection.to, insert },
-      selection: EditorSelection.range(anchor, head)
-    });
-    view.focus();
-  }
-
-  function prefixCurrentLine(prefix: string) {
-    if (!view) return;
-    const head = view.state.selection.main.head;
-    const line = view.state.doc.lineAt(head);
-    const current = view.state.sliceDoc(line.from, line.to);
-    const cleaned = current.replace(/^#{1,6}\s+|^>\s+|^[-*]\s+|^\d+\.\s+|^- \[[ xX]\]\s+/, '');
-    const insert = `${prefix}${cleaned}`;
-
-    view.dispatch({
-      changes: { from: line.from, to: line.to, insert },
-      selection: EditorSelection.cursor(line.from + insert.length)
-    });
+  function dispatchFormatting(spec: Parameters<EditorView['dispatch']>[0] | null) {
+    if (!view || !spec) return;
+    view.dispatch({ ...spec, annotations: isolateHistory.of('full') });
     view.focus();
   }
 
@@ -710,20 +745,25 @@
 
     view.dispatch({
       changes: { from: selection.from, to: selection.to, insert },
-      selection: EditorSelection.cursor(selection.from + before.length + block.length)
+      selection: EditorSelection.cursor(selection.from + before.length + block.length),
+      annotations: isolateHistory.of('full')
     });
     view.focus();
   }
 </script>
 
 <div class="editor-wrap">
-  <div class="editor-host" bind:this={host}></div>
+  <div
+    class="editor-host"
+    bind:this={host}
+    data-marklite-application-shortcuts="true"
+  ></div>
 
   {#if editorMountFailed}
     <section class="editor-startup-error" role="alert">
-      <strong>编辑器未能加载</strong>
-      <span>文档仍保留在内存中，可以重试编辑器初始化。</span>
-      <button type="button" on:click={mountEditor}>重试编辑器</button>
+      <strong>{$translator('editor.loadFailed')}</strong>
+      <span>{$translator('editor.loadFailedDescription')}</span>
+      <button type="button" on:click={mountEditor}>{$translator('editor.retry')}</button>
     </section>
   {/if}
 
@@ -734,8 +774,8 @@
           type="button"
           class="find-icon-button replace-toggle"
           class:expanded={replaceExpanded}
-          title={replaceExpanded ? '收起替换' : '展开替换'}
-          aria-label={replaceExpanded ? '收起替换' : '展开替换'}
+          title={replaceExpanded ? $translator('editor.find.collapseReplace') : $translator('editor.find.expandReplace')}
+          aria-label={replaceExpanded ? $translator('editor.find.collapseReplace') : $translator('editor.find.expandReplace')}
           aria-expanded={replaceExpanded}
           on:click={toggleReplaceExpanded}
         >
@@ -744,12 +784,12 @@
           </span>
         </button>
 
-        <label class="find-input-shell" aria-label="搜索文档">
+        <label class="find-input-shell" aria-label={$translator('editor.find.search')}>
           <Search size={15} />
           <input
             bind:this={searchInput}
             value={searchQuery}
-            placeholder="搜索文档"
+            placeholder={$translator('editor.find.search')}
             spellcheck="false"
             on:input={handleSearchInput}
             on:keydown={handleSearchKeydown}
@@ -757,13 +797,13 @@
           <span class:empty={!searchMatches.length}>{matchCounter}</span>
         </label>
 
-        <button type="button" class="find-icon-button" title="上一个" disabled={!searchMatches.length} on:click={() => moveSearchMatch(-1)}>
+        <button type="button" class="find-icon-button" title={$translator('editor.find.previous')} disabled={!searchMatches.length} on:click={() => moveSearchMatch(-1)}>
           <ChevronUp size={16} />
         </button>
-        <button type="button" class="find-icon-button" title="下一个" disabled={!searchMatches.length} on:click={() => moveSearchMatch(1)}>
+        <button type="button" class="find-icon-button" title={$translator('editor.find.next')} disabled={!searchMatches.length} on:click={() => moveSearchMatch(1)}>
           <ChevronDown size={16} />
         </button>
-        <button type="button" class="find-icon-button" title="关闭" on:click={closeFind}>
+        <button type="button" class="find-icon-button" title={$translator('editor.find.close')} on:click={closeFind}>
           <X size={16} />
         </button>
       </div>
@@ -771,21 +811,21 @@
       {#if replaceExpanded}
         <div class="replace-row">
           <span class="replace-row-spacer" aria-hidden="true"></span>
-          <label class="replace-input-shell" aria-label="替换为">
+          <label class="replace-input-shell" aria-label={$translator('editor.find.replace')}>
             <Replace size={15} />
             <input
               bind:this={replaceInput}
               value={replaceValue}
-              placeholder="替换为"
+              placeholder={$translator('editor.find.replace')}
               spellcheck="false"
               on:input={handleReplaceInput}
               on:keydown={handleReplaceKeydown}
             />
           </label>
-          <button type="button" class="find-icon-button" title="替换当前" disabled={!canReplace} on:click={replaceCurrentMatch}>
+          <button type="button" class="find-icon-button" title={$translator('editor.find.replaceOne')} disabled={!canReplace} on:click={replaceCurrentMatch}>
             <Replace size={16} />
           </button>
-          <button type="button" class="find-icon-button" title="全部替换" disabled={!canReplace} on:click={replaceAllMatches}>
+          <button type="button" class="find-icon-button" title={$translator('editor.find.replaceAll')} disabled={!canReplace} on:click={replaceAllMatches}>
             <ReplaceAll size={16} />
           </button>
           <span class="replace-row-spacer" aria-hidden="true"></span>
