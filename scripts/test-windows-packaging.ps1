@@ -365,6 +365,11 @@ exit 38
   Assert-True -Condition (Test-Path -LiteralPath "$wrapperArtifact.release.json" -PathType Leaf) -Message "Successful wrapper must retain JSON evidence"
   $wrapperEvidence = Get-Content -Raw -LiteralPath "$wrapperArtifact.release.json" | ConvertFrom-Json
   Assert-Equal -Actual $wrapperEvidence.artifact.sha256 -Expected (Get-Sha256Hex -Path $wrapperArtifact) -Message "Successful wrapper evidence must bind the actual artifact hash"
+  $publishedInstaller = Join-Path $wrapperRoot 'release\windows\x64\MarkLite_7.6.5_x64-setup.exe'
+  Assert-True -Condition (Test-Path -LiteralPath $publishedInstaller -PathType Leaf) -Message 'Wrapper must stage the installer under release/windows/x64'
+  Assert-Equal -Actual (Get-Sha256Hex -Path $publishedInstaller) -Expected (Get-Sha256Hex -Path $wrapperArtifact) -Message 'Staged installer must match generated installer'
+  Assert-True -Condition (Test-Path -LiteralPath "$publishedInstaller.sha256" -PathType Leaf) -Message 'Staged installer must include SHA-256 sidecar'
+  Assert-True -Condition (Test-Path -LiteralPath "$publishedInstaller.release.json" -PathType Leaf) -Message 'Staged installer must include release evidence'
   Assert-Equal -Actual (Get-Content -Raw -LiteralPath $wrapperBuildMarker) -Expected "skip=True;evidence=True" -Message "Wrapper must forward SkipTauriBuild and always defer build-stage evidence"
   Assert-Equal -Actual (Get-Content -Raw -LiteralPath $wrapperEvidenceMarker) -Expected "skip-tauri-build" -Message "Wrapper must forward the evidence build mode"
 

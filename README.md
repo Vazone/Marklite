@@ -125,6 +125,8 @@ Build the verified Windows NSIS package:
 npm run package:windows
 ```
 
+Local installers are staged under `release/<platform>/<architecture>/` with SHA-256 sidecars. Windows uses `release/windows/x64/`. On Linux, run `npm run package:linux` to build and stage the AppImage and DEB in `release/linux/amd64/`. The `release/` directory is ignored by Git.
+
 Platform packages are built with GitHub Actions. Release assets are published after the Windows, Linux, and both macOS architecture builds complete.
 
 ## Command-line export

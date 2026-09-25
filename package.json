@@ -48,6 +48,7 @@
     "conformance:markdown": "node scripts/markdown-conformance.mjs",
     "conformance:diagrams": "node scripts/diagram-conformance.mjs",
     "package:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1",
+    "package:linux": "node scripts/package-linux.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

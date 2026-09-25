@@ -22,6 +22,8 @@ $tauriConfig = Get-Content -Raw -LiteralPath (Join-Path $root "src-tauri\tauri.c
 $version = [string]$tauriConfig.version
 $artifact = Assert-WorkspacePath -Path (Join-Path $root "src-tauri\target\release\bundle\nsis\MarkLite_$($version)_$($Architecture)-setup.exe") -WorkspaceRoot $root
 $outputs = @($artifact, "$artifact.sha256", "$artifact.release.json")
+$releaseDirectory = Assert-WorkspacePath -Path (Join-Path $root "release\windows\$Architecture") -WorkspaceRoot $root
+$releaseArtifact = Assert-WorkspacePath -Path (Join-Path $releaseDirectory (Split-Path -Leaf $artifact)) -WorkspaceRoot $root
 if ([string]::IsNullOrWhiteSpace($BuildScriptPath)) {
   $BuildScriptPath = Join-Path $PSScriptRoot "build-windows-installer.ps1"
 }
@@ -64,8 +66,30 @@ try {
   ) -Description "Release evidence generation"
 
   $evidence = Get-Content -Raw -LiteralPath "$artifact.release.json" | ConvertFrom-Json
+  if ($evidence.artifact.sha256 -ne (Get-Sha256Hex -Path $artifact)) {
+    throw "Windows release evidence does not match the installer."
+  }
+  New-Item -ItemType Directory -Force -Path $releaseDirectory | Out-Null
+  $stagingDirectory = Assert-WorkspacePath -Path (Join-Path $releaseDirectory ".stage-$([guid]::NewGuid().ToString('N'))") -WorkspaceRoot $root
+  New-Item -ItemType Directory -Path $stagingDirectory | Out-Null
+  try {
+    foreach ($suffix in @("", ".sha256", ".release.json")) {
+      Copy-Item -LiteralPath "$artifact$suffix" -Destination (Join-Path $stagingDirectory "$(Split-Path -Leaf $artifact)$suffix")
+    }
+    if ((Get-Sha256Hex -Path (Join-Path $stagingDirectory (Split-Path -Leaf $artifact))) -ne $evidence.artifact.sha256) {
+      throw "Staged Windows installer does not match release evidence."
+    }
+    foreach ($suffix in @("", ".sha256", ".release.json")) {
+      Remove-WorkspaceFileIfPresent -Path "$releaseArtifact$suffix" -WorkspaceRoot $root
+      Move-Item -LiteralPath (Join-Path $stagingDirectory "$(Split-Path -Leaf $artifact)$suffix") -Destination "$releaseArtifact$suffix"
+    }
+  } finally {
+    if (Test-Path -LiteralPath $stagingDirectory) {
+      Remove-Item -LiteralPath $stagingDirectory -Recurse -Force
+    }
+  }
   $succeeded = $true
-  Write-Host "Windows package complete: $($evidence.artifact.fileName)"
+  Write-Host "Windows package complete: $releaseArtifact"
   Write-Host "SHA-256: $($evidence.artifact.sha256)"
   Write-Host "Authenticode status: $($evidence.signature.status)"
 } finally {
