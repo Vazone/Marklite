@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { androidEnvironment, root, run } from './environment.mjs';
@@ -8,6 +8,7 @@ import { artifactDigest } from '../distribution/manifest.mjs';
 const env = androidEnvironment();
 const { version } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+if (process.platform !== 'win32') chmodSync(join(root, 'src-tauri/gen/android/gradlew'), 0o755);
 run(process.execPath, [join(root, 'node_modules/@tauri-apps/cli/tauri.js'), 'android', 'build',
   '--target', 'aarch64', '--apk', '--split-per-abi', '--ci'], env);
 const directory = join(root, 'android-unsigned');
