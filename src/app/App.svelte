@@ -1,13 +1,21 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
+  import WorkspacePanel from '../features/workspace/WorkspacePanel.svelte';
+  import { createWorkspaceStore } from '../features/workspace/store';
+  import { pickWorkspaceDirectory } from '../lib/platform/dialogs';
+  import { listenWorkspaceChanges } from '../lib/platform/workspaceEvents';
+  import { desktopFile, type ResourceRef } from '../lib/platform/resources';
+  import { createAndroidDocuments } from '../lib/platform/androidDocuments';
+  import { androidAvailableViewportHeight, exitAndroidApplication, getAndroidSystemInsets, parseAndroidSystemInsets, setAndroidStatusBarAppearance, type AndroidSystemInsets } from '../lib/platform/androidLifecycle';
   import { get } from 'svelte/store';
-  import { getCurrentWindow } from '@tauri-apps/api/window';
-  import type { DragDropEvent } from '@tauri-apps/api/webview';
   import Sidebar from '../components/layout/Sidebar.svelte';
   import DocumentTabBar from '../components/layout/DocumentTabBar.svelte';
   import SplitPaneSeparator from '../components/layout/SplitPaneSeparator.svelte';
   import SidebarResizeSeparator from '../components/layout/SidebarResizeSeparator.svelte';
   import StatusBar from '../components/layout/StatusBar.svelte';
+  import UpdateBanner from '../features/updates/UpdateBanner.svelte';
+  import { createUpdateService, type UpdateView } from '../features/updates/service';
+  import { prepareInstall } from '../features/updates/installBarrier';
   import TitleBar from '../components/layout/TitleBar.svelte';
   import {
     activeEditor,
@@ -19,9 +27,9 @@
     documentStore,
     getActiveTab,
     sessionProjection,
+    resourceSessionProjection,
     tabBarState,
     type CursorPosition,
-    type DocumentState,
     type EditorScrollPosition,
     type EditorTab
   } from './stores/documentStore';
@@ -39,11 +47,11 @@
     openExternalLink,
     toAppError,
     type AppSettings,
-    type DocumentOperationDto,
     type ExportFormat,
     type ExportOptions,
     type RecentFileDto,
-    type SessionStateDto
+    type SessionStateDto,
+    type ResourceSessionDto
   } from '../lib/tauriApi';
   import { toolbarItems, type ToolbarAction } from '../lib/markdownToolbar';
   import {
@@ -53,20 +61,25 @@
     type CommandId,
     type CommandItem
   } from '../lib/commands';
-  import { createAsyncSingleFlight } from '../lib/asyncSingleFlight';
-  import { saveDocumentSnapshot } from '../lib/documentSave';
-  import { isSameFileIdentity, isSameFilePath } from '../lib/filePathIdentity';
+  import { createOpenController } from './controllers/openController';
+  import { createNativeController } from './controllers/nativeController';
+  import { createSaveController, type SaveConflict } from './controllers/saveController';
   import {
     createExitProtectionController,
     type DirtyExitDocument,
     type ExitPromptState
   } from '../lib/exitProtection';
-  import { startupElapsedMs, type FrontendStartupStage } from '../lib/startupLifecycle';
-  import { ExportProgressTask, type ExportProgressView } from '../lib/exportProgress';
-  import { runExportJob, createExportJobId } from '../lib/documentExport';
-  import { exportWarningReport, type ExportWarningReport } from '../lib/exportWarningReport';
+  import RecoveryPanel from '../components/dialogs/RecoveryPanel.svelte';
+  import { createRecoveryController } from './controllers/recoveryController';
+  import { createResidencyController } from './controllers/residencyController';
+  import type { RecoveryInventory } from '../lib/platform/recovery';
+  import { createShellController } from './controllers/shellController';
+  import { type ExportProgressView } from '../lib/exportProgress';
+  import { createExportController } from './controllers/exportController';
+  import { createResourceStorage } from '../lib/platform/resourceStorage';
+  import { desktopEvents, listenExportProgress } from '../lib/platform/desktopEvents';
+  import { type ExportWarningReport } from '../lib/exportWarningReport';
   import { appInitialization } from '../lib/appInitialization';
-  import { openDocumentPath } from '../lib/documentOpen';
   import { createLifecycleScope } from '../lib/lifecycleScope';
   import { shouldHandleGlobalShortcut } from '../lib/shortcutGuard';
   import { observeMediaQuery } from '../lib/mediaQuery';
@@ -75,7 +88,6 @@
   import { createAutosaveScheduler } from '../lib/autosaveScheduler';
   import { createLazyComponent } from '../lib/lazyComponent';
   import { createSessionCoordinator } from '../lib/sessionCoordinator';
-  import { serializeMindMapSvg } from '../lib/mindMapSvg';
   import { localizeError, t, translator } from '../lib/i18n';
 
   type MarkdownEditorHandle = {
@@ -90,19 +102,21 @@
   type PreviewPaneHandle = {
     scrollToFragment: (fragment: string) => void;
     syncToEditorScroll: (position: EditorScrollPosition | undefined, identity: { tabId: string; contentRevision: number }) => void;
+    refreshDiagrams: () => void;
   };
 
   type MarkdownEditorProps = {
     tabId: string;
     value: string;
     settings: AppSettings;
-    serializedState: import('../lib/editorSession').SerializedEditorState | null;
+    mobile: boolean;
+    serializedState: import('../lib/editorSession').EditorSnapshot | null;
     initialScrollPosition: EditorScrollPosition;
     onChange: (tabId: string, value: string, lineCount: number) => void;
     onDirty: (tabId: string) => void;
     onCursorChange: (tabId: string, position: CursorPosition) => void;
     onScrollSync: (tabId: string, position: EditorScrollPosition, userInitiated: boolean) => void;
-    onSessionChange: (tabId: string, state: import('../lib/editorSession').SerializedEditorState) => void;
+    onSessionChange: (tabId: string, state: import('../lib/editorSession').EditorSnapshot) => void;
   };
 
   type PreviewPaneProps = {
@@ -114,11 +128,13 @@
     virtualPreview: import('../lib/tauriApi').VirtualPreviewIndex | null;
     diagrams: import('../lib/tauriApi').DiagramSource[];
     diagramDiagnostics: import('../lib/tauriApi').DiagramDiagnostic[];
+    markdownDiagnostics: import('../lib/tauriApi').MarkdownDiagnostic[];
     settings: AppSettings;
-    documentPath: string | null;
+    mobile: boolean;
+    documentResource: ResourceRef | null;
     documentTitle: string;
     outline: import('../lib/tauriApi').OutlineItem[];
-    onOpenDocument: (path: string, fragment: string | null) => Promise<boolean>;
+    onOpenDocument: (resource: ResourceRef, fragment: string | null) => Promise<boolean>;
     onJumpToLine: (line: number) => void;
     onSyncEditorLine: (line: number) => void;
     onCopySource: () => Promise<void>;
@@ -158,50 +174,69 @@
   let editorRef: MarkdownEditorHandle | undefined;
   let previewRef: PreviewPaneHandle | undefined;
   let recentFiles: RecentFileDto[] = [];
+  let androidRecentFiles: import('../lib/platform/androidDocuments').AndroidRecentDocument[] = [];
   let autosaveTimer: number | undefined;
   let autosaveKey = '';
   let lastSessionKey = '';
   let sessionInitialized = false;
+  let resourceSessionMode = false;
   let pendingPreviewFragment: { tabId: string; fragment: string } | null = null;
   let previewFragmentTimer: number | undefined;
-  let openRequestDrainRunning = false;
-  let openRequestDrainRequested = false;
-  const saveSingleFlight = createAsyncSingleFlight<string, DocumentOperationDto | null>();
-  const loadSingleFlight = createAsyncSingleFlight<string, EditorTab | null>();
-  const autosaveFailureKeys = new Map<string, string>();
-  const autosaveConflictTabs = new Set<string>();
   const autosaveScheduler = createAutosaveScheduler(
     () => get(documentStore).tabs.map((tab) => ({
       id: tab.id,
-      path: tab.path,
+      resource: tab.resource,
       dirty: tab.isDirty,
       loaded: tab.loadState === 'loaded',
-      blocked: autosaveConflictTabs.has(tab.id)
+      blocked: saveController.isBlocked(tab.id)
     })),
-    (tabId, path) => saveTab(tabId, path, false)
+    (tabId, resource) => saveController.saveResource(tabId, resource, false)
   );
   const lifecycleScope = createLifecycleScope();
+  const residencyController = createResidencyController({
+    subscribe: documentStore.subscribe,
+    evict: documentStore.evictClean,
+    releasePreview: api.releaseMarkdownPreview,
+    onError: error => uiActions.toast(errorMessage(error), 'error')
+  });
   const sessionCoordinator = createSessionCoordinator({
     persist: async ({ enabled, session }) => {
-      if (enabled) await api.updateSession(session);
+      if (enabled) {
+        if (session.version === 2) await api.updateResourceSession(session);
+        else await api.updateSession(session);
+      } else if (session.version === 2) await api.clearResourceSession();
       else await api.clearSession();
     },
     onError: (error) => uiActions.toast(errorMessage(error), 'error')
   });
-  let allowBrowserUnload = false;
+  let recoveryInventory: RecoveryInventory = { entries: [], issues: [] };
+  let recoveryPanelOpen = false;
+  const recoveryController = createRecoveryController({
+    api, subscribe: documentStore.subscribe, flushEditor: flushActiveEditor,
+    version: resource => resourceStorage.version(resource, true),
+    openCopy: snapshot => documentStore.openDocument({
+      path: null, resource: null, fileIdentity: null, contentVersion: null,
+      title: snapshot.title, content: snapshot.content, isDirty: true, lastSavedAt: null, fileSize: null
+    }),
+    onInventory: inventory => { recoveryInventory = inventory; },
+    onError: error => uiActions.toast(errorMessage(error), 'error')
+  });
   let exitPrompt: ExitPromptState | null = null;
-  let saveConflictPrompt: { tabId: string; path: string; title: string; busy: boolean } | null = null;
+  let saveConflictPrompt: SaveConflict | null = null;
   let exportDialogOpen = false;
   let exportBusy = false;
   let exportProgress: ExportProgressView | null = null;
-  let exportTask: ExportProgressTask | null = null;
-  let imageExportJob: { id: string; executing: boolean; cancelRequested: boolean } | null = null;
+  let exportCancelRequested = false;
   let lastExportWarnings: ExportWarningReport | null = null;
   let warningDetailsOpen = false;
   let initializationComplete = false;
+  let desktopUpdates = false;
+  let desktopDiagramPack = false;
+  let updateView: UpdateView = { phase: 'idle' };
+  let updateService: ReturnType<typeof createUpdateService> | null = null;
+  let unsubscribeUpdates: (() => void) | null = null;
   const narrowViewportQuery = window.matchMedia?.('(max-width: 920px)');
   let narrowViewport = narrowViewportQuery?.matches ?? false;
-  const initializationStartedAt = performance.now();
   const markdownCoordinator = createMarkdownRenderCoordinator({
     render: (content, tabId, contentRevision) => api.renderMarkdown(content, tabId, contentRevision),
     analyze: (content) => api.analyzeMarkdown(content),
@@ -230,7 +265,7 @@
   });
 
   $: currentTitle = $activeShell?.title ?? 'Untitled.md';
-  $: effectiveSidebarVisible = $uiStore.sidebarVisible;
+  $: effectiveSidebarVisible = showAndroidFolderAction && narrowViewport ? mobileDrawerOpen : $uiStore.sidebarVisible;
   $: visiblePanes = paneVisibility($uiStore.layoutMode, narrowViewport);
   $: commandItems = buildCommands();
   $: if (initializationComplete && $activeEditor?.loadState === 'loaded' && visiblePanes.editor) {
@@ -280,8 +315,10 @@
   }
 
   $: if (sessionInitialized) {
-    const session: SessionStateDto = { version: 1, ...$sessionProjection };
-    const sessionKey = `${$settingsStore.restoreLastSession}:${session.activePath ?? ''}:${session.paths.join('\u0000')}`;
+    const session: SessionStateDto | ResourceSessionDto = resourceSessionMode
+      ? { version: 2, ...$resourceSessionProjection }
+      : { version: 1, ...$sessionProjection };
+    const sessionKey = `${$settingsStore.restoreLastSession}:${JSON.stringify(session)}`;
     if (sessionKey !== lastSessionKey) {
       lastSessionKey = sessionKey;
       sessionCoordinator.queue({ enabled: $settingsStore.restoreLastSession, session });
@@ -383,12 +420,108 @@
     }
   }
 
+  let showAndroidFolderAction = false;
+  let availableExportFormats: ExportFormat[] = ['html', 'pdf', 'docx', 'png', 'svg'];
+  let allowLocalImageExport = true;
+  let androidExport = false;
+  let mobileDrawerOpen = false;
+  let mobileMenuOpen = false;
+  let compactAndroidIme = false;
+  let shellElement: HTMLDivElement;
+  function observeAndroidViewport(): () => void {
+    const viewport = window.visualViewport;
+    if (!viewport) return () => {};
+    let imeBottom = 0;
+    const updateHeight = () => {
+      const availableHeight = androidAvailableViewportHeight(window.innerHeight, viewport.height, imeBottom);
+      shellElement.style.setProperty('--android-viewport-height', `${availableHeight}px`);
+      // Below this height the title, tabs, toolbar and status leave less than
+      // three editor lines. Keep the save control and content while the IME is open.
+      compactAndroidIme = imeBottom > 0 && availableHeight < 260;
+    };
+    const applyInsets = (insets: AndroidSystemInsets) => {
+      imeBottom = insets.imeBottom;
+      shellElement.style.setProperty('--android-system-top', `${insets.top}px`);
+      shellElement.style.setProperty('--android-system-right', `${insets.right}px`);
+      shellElement.style.setProperty('--android-system-bottom', `${imeBottom > 0 ? 0 : insets.bottom}px`);
+      shellElement.style.setProperty('--android-system-left', `${insets.left}px`);
+      updateHeight();
+    };
+    const updateInsets = (event: Event) => {
+      try { applyInsets(parseAndroidSystemInsets((event as CustomEvent<unknown>).detail)); }
+      catch { /* Ignore malformed native events; the initial command still supplies insets. */ }
+    };
+    updateHeight();
+    viewport.addEventListener('resize', updateHeight);
+    window.addEventListener('marklite:system-insets', updateInsets);
+    void getAndroidSystemInsets().then(applyInsets)
+      .catch(error => uiActions.toast(errorMessage(error), 'error'));
+    return () => {
+      viewport.removeEventListener('resize', updateHeight);
+      window.removeEventListener('marklite:system-insets', updateInsets);
+      compactAndroidIme = false;
+      shellElement.style.removeProperty('--android-viewport-height');
+      for (const side of ['top', 'right', 'bottom', 'left']) {
+        shellElement.style.removeProperty(`--android-system-${side}`);
+      }
+    };
+  }
+  function toggleSidebar(): void {
+    if (showAndroidFolderAction && narrowViewport) mobileDrawerOpen = !mobileDrawerOpen;
+    else uiActions.toggleSidebar();
+  }
+  function collapseSidebar(): void {
+    if (showAndroidFolderAction && narrowViewport) mobileDrawerOpen = false;
+    else uiActions.collapseSidebar();
+  }
+  function handleAndroidBack(): void {
+    if (mobileMenuOpen) { mobileMenuOpen = false; return; }
+    if (mobileDrawerOpen) { mobileDrawerOpen = false; return; }
+    if (saveConflictPrompt) {
+      if (!saveConflictPrompt.busy) closeSaveConflictPrompt();
+      return;
+    }
+    if (exitPrompt) { exitProtection.cancel(); return; }
+    if (warningDetailsOpen) { warningDetailsOpen = false; return; }
+    if (exportDialogOpen) { closeExportDialog(); return; }
+    if ($uiStore.settingsOpen || $uiStore.commandPaletteOpen || $uiStore.aboutOpen || $uiStore.markdownGuideOpen) {
+      uiActions.closeModals();
+      return;
+    }
+    flushActiveEditor();
+    exitProtection.handleCloseRequest(() => {});
+  }
   onMount(() => {
-    void initialize()
+    if (isTauriRuntime()) {
+      void api.getPlatformCapabilities().then(async capabilities => {
+        availableExportFormats = capabilities.exportFormats;
+        allowLocalImageExport = capabilities.desktopFiles || capabilities.documentUris;
+        androidExport = capabilities.platform === 'android';
+        desktopDiagramPack = capabilities.desktopFiles;
+        if (capabilities.platform !== 'android') return;
+        showAndroidFolderAction = true;
+        applyTheme(get(settingsStore));
+        lifecycleScope.own(observeAndroidViewport());
+        window.addEventListener('marklite:android-back', handleAndroidBack);
+        lifecycleScope.own(() => window.removeEventListener('marklite:android-back', handleAndroidBack));
+        lifecycleScope.own(await androidDocuments.listenOpenRequests(() => {
+          if (initializationComplete) void drainAndroidOpenRequests();
+        }));
+        if (initializationComplete) void drainAndroidOpenRequests();
+      }).catch(error => uiActions.toast(errorMessage(error), 'error'));
+    }
+    residencyController.start();
+    void shellController.initialize()
       .then(async () => {
         initializationComplete = true;
+        void workspaceStore.start();
+        if (isTauriRuntime()) void recoveryController.start().catch(error => uiActions.toast(errorMessage(error), 'error'));
         await tick();
         appInitialization.succeed();
+        if (isTauriRuntime()) {
+          void startDesktopUpdates();
+          void drainAndroidOpenRequests();
+        }
       })
       .catch((error) => {
         appInitialization.fail();
@@ -398,20 +531,18 @@
       void setupCloseProtection();
     }
 
-    const keyHandler = (event: KeyboardEvent) => {
-      handleGlobalShortcut(event);
-    };
-    const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (!allowBrowserUnload && get(documentStore).tabs.some((tab) => tab.isDirty)) {
-        event.preventDefault();
-        event.returnValue = '';
+    shellController.mount();
+    const checkpointRecovery = () => {
+      if (isTauriRuntime() && document.visibilityState === 'hidden') {
+        void recoveryController.flush().catch(error => uiActions.toast(errorMessage(error), 'error'));
       }
     };
-
-    window.addEventListener('keydown', keyHandler);
-    window.addEventListener('beforeunload', beforeUnload);
-    lifecycleScope.own(() => window.removeEventListener('keydown', keyHandler));
-    lifecycleScope.own(() => window.removeEventListener('beforeunload', beforeUnload));
+    const onVisibilityChange = () => {
+      checkpointRecovery();
+      if (document.visibilityState === 'visible') void drainAndroidOpenRequests();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    lifecycleScope.own(() => document.removeEventListener('visibilitychange', onVisibilityChange));
     if (window.matchMedia) {
       lifecycleScope.own(
         observeMediaQuery(window.matchMedia('(prefers-color-scheme: dark)'), () => {
@@ -433,181 +564,98 @@
   });
 
   onDestroy(() => {
-    if (imageExportJob) void cancelImageExport();
-    exportTask?.dispose();
+    workspaceStore.dispose();
+    residencyController.dispose();
+    recoveryController.dispose();
+    exportController.dispose();
+    nativeController.dispose();
+    shellController.dispose();
     markdownCoordinator.dispose();
     autosaveScheduler.dispose();
     if (previewFragmentTimer !== undefined) window.clearTimeout(previewFragmentTimer);
     if (autosaveTimer) window.clearInterval(autosaveTimer);
     sessionCoordinator.dispose();
+    unsubscribeUpdates?.();
+    void updateService?.dispose();
   });
 
-  async function initialize() {
-    recordStartupStage('initialization', 'started');
+  async function startDesktopUpdates() {
     try {
-      await runStartupStage('settings', async () => {
-        const loaded = await settingsStore.load();
-        const settings = get(settingsStore);
-        uiActions.setSidebarVisible(settings.showSidebar);
-        return loaded;
+      const capabilities = await api.getPlatformCapabilities();
+      if (!capabilities.desktopFiles || !['windows', 'linux', 'macos'].includes(capabilities.platform)) return;
+      const { desktopUpdateAdapter } = await import('../features/updates/desktop');
+      updateService = createUpdateService({
+        adapter: desktopUpdateAdapter,
+        preferences: {
+          getItem: key => window.localStorage.getItem(key),
+          setItem: (key, value) => window.localStorage.setItem(key, value)
+        },
+        autoEnabled: () => get(settingsStore).checkUpdatesAutomatically,
+        prepareInstall: prepareUpdateInstall,
+        reportError: errorMessage
       });
-      const settings = get(settingsStore);
-      await runStartupStage('recentFiles', refreshRecentFiles);
-      const sessionWritable = await runStartupStage('sessionRestore', () => restoreSession(settings.restoreLastSession));
-      sessionCoordinator.setWritable(sessionWritable);
+      unsubscribeUpdates = updateService.subscribe(view => { updateView = view; });
+      desktopUpdates = true;
+      void updateService.check();
+    } catch (error) {
+      console.warn('Desktop updates unavailable', error);
+    }
+  }
+
+  async function checkUpdatesManually() {
+    uiActions.closeAbout();
+    if (!updateService) return;
+    await updateService.check(true);
+    if (updateView.phase === 'idle') uiActions.toast(t('update.noUpdate'));
+  }
+
+  async function prepareUpdateInstall(): Promise<boolean> {
+    const result = await prepareInstall({
+      flushEditor: flushActiveEditor,
+      isBusy: () => exportBusy || exitPrompt !== null || saveConflictPrompt !== null,
+      dirtyDocuments: getDirtyExitDocuments,
+      confirmSave: count => confirmAction(t('update.confirmSave', { count })),
+      saveDocument: saveDirtyDocumentBeforeExit,
+      flushPersistence: async () => {
+        await recoveryController.flush();
+        await workspaceStore.flush();
+        await shellController.flushSession();
+      }
+    });
+    if (result === 'busy') uiActions.toast(t('update.exportBusy'), 'info');
+    if (result === 'save-failed') uiActions.toast(t('update.saveFailed'), 'error');
+    return result === 'ready';
+  }
+
+  const nativeController = createNativeController({
+    enabled: isTauriRuntime(), events: desktopEvents,
+    drain: api.drainOpenFileRequests, open: openPath,
+    close: (preventDefault) => { flushActiveEditor(); exitProtection.handleCloseRequest(preventDefault); },
+    onError: (error) => uiActions.toast(errorMessage(error), 'error'),
+    onCloseUnavailable: () => uiActions.toast(t('toast.nativeExitUnavailable'), 'error')
+  });
+  const setupDragDrop = nativeController.dragDrop;
+  const setupExternalOpenListener = nativeController.externalOpen;
+  const setupCloseProtection = nativeController.closeProtection;
+
+  const shellController = createShellController({
+    api, loadSettings: settingsStore.load, settings: () => get(settingsStore),
+    state: () => get(documentStore), setSidebarVisible: uiActions.setSidebarVisible,
+    refreshRecentFiles, restoreTabs: documentStore.restoreSessionTabs,
+    restoreResourceTabs: documentStore.restoreResourceSessionTabs,
+    onResourceSessionMode: (enabled) => { resourceSessionMode = enabled; }, sessionCoordinator,
+    onSessionReady: () => {
       sessionInitialized = true;
-      await runStartupStage('externalListeners', setupExternalOpenListener);
-      await runStartupStage('startupFile', openStartupFile);
-      await runStartupStage('firstRender', renderActiveNow);
-      await runStartupStage('dragDrop', setupDragDrop);
-      recordStartupStage('initialization', 'succeeded');
-    } catch (error) {
-      recordStartupStage('initialization', 'failed', 'initializationFailed');
-      throw error;
-    }
-  }
-
-  async function runStartupStage(stage: FrontendStartupStage, operation: () => Promise<void | boolean>) {
-    recordStartupStage(stage, 'started');
-    try {
-      const result = await operation();
-      recordStartupStage(
-        stage,
-        result === false ? 'degraded' : 'succeeded',
-        result === false ? 'stageDegraded' : null
-      );
-      return result !== false;
-    } catch (error) {
-      recordStartupStage(stage, 'failed', 'initializationFailed');
-      throw error;
-    }
-  }
-
-  function recordStartupStage(
-    stage: FrontendStartupStage,
-    status: 'started' | 'succeeded' | 'degraded' | 'failed',
-    code: 'initializationFailed' | 'stageDegraded' | null = null
-  ) {
-    void api
-      .recordFrontendStartupEvent({
-        stage,
-        status,
-        code,
-        elapsedMs: startupElapsedMs(initializationStartedAt)
-      })
-      .catch(() => undefined);
-  }
-
-  async function restoreSession(enabled: boolean) {
-    if (!enabled) {
-      try {
-        await api.clearSession();
-        return true;
-      } catch (error) {
-        uiActions.toast(errorMessage(error), 'error');
-        return false;
-      }
-    }
-
-    try {
-      const session = await api.getSession();
-      documentStore.restoreSessionTabs(session.paths.slice(0, 50), session.activePath);
-      return true;
-    } catch (error) {
-      uiActions.toast(errorMessage(error), 'error');
-      return false;
-    }
-  }
-
-  function currentSessionSnapshot(state: DocumentState): SessionStateDto {
-    const paths = [...new Set(state.tabs.map((tab) => tab.path).filter((path): path is string => Boolean(path)))].slice(0, 50);
-    const activePath = state.tabs.find((tab) => tab.id === state.activeTabId)?.path ?? null;
-    return {
-      version: 1,
-      paths,
-      activePath: activePath && paths.includes(activePath) ? activePath : null
-    };
-  }
-
-  async function openStartupFile() {
-    try {
-      const path = await api.getStartupFileArg();
-      if (path) {
-        return Boolean(await openPath(path));
-      }
-      return true;
-    } catch (error) {
-      console.warn('No startup file argument available', error);
-      return false;
-    }
-  }
-
-  async function setupDragDrop() {
-    if (!isTauriRuntime()) return true;
-
-    try {
-      const unlisten = await getCurrentWindow().onDragDropEvent((event: { payload: DragDropEvent }) => {
-        if (event.payload?.type !== 'drop') return;
-        const path = event.payload.paths.find((item) => /\.(md|markdown|txt)$/i.test(item));
-        if (path) {
-          void openPath(path);
-        }
-      });
-      lifecycleScope.own(unlisten);
-      return true;
-    } catch (error) {
-      console.warn('Failed to register drag drop handler', error);
-      return false;
-    }
-  }
-
-  async function setupExternalOpenListener() {
-    if (!isTauriRuntime()) return true;
-
-    try {
-      const unlisten = await getCurrentWindow().listen('single-instance-open-file', () => {
-        void requestOpenFileDrain().catch((error) => {
-          uiActions.toast(errorMessage(error), 'error');
-        });
-      });
-      lifecycleScope.own(unlisten);
-      await requestOpenFileDrain();
-      return true;
-    } catch (error) {
-      console.warn('Failed to register external open listener', error);
-      return false;
-    }
-  }
-
-  async function requestOpenFileDrain() {
-    openRequestDrainRequested = true;
-    if (openRequestDrainRunning) return;
-    openRequestDrainRunning = true;
-    try {
-      do {
-        openRequestDrainRequested = false;
-        const paths = await api.drainOpenFileRequests();
-        for (const path of paths) {
-          await openPath(path);
-        }
-      } while (openRequestDrainRequested);
-    } finally {
-      openRequestDrainRunning = false;
-    }
-  }
-
-  async function setupCloseProtection() {
-    try {
-      const unlisten = await getCurrentWindow().onCloseRequested((event) => {
-        flushActiveEditor();
-        exitProtection.handleCloseRequest(() => event.preventDefault());
-      });
-      lifecycleScope.own(unlisten);
-    } catch (error) {
-      console.warn('Failed to register close protection', error);
-      uiActions.toast(t('toast.nativeExitUnavailable'), 'error');
-    }
-  }
+      if (resourceSessionMode) void refreshDeferredAndroidTitles();
+    },
+    setupExternalOpenListener, openPath, renderActiveNow, setupDragDrop,
+    flushEditor: flushActiveEditor, destroyWindow: async () => {
+      await workspaceStore.flush();
+      if (resourceSessionMode) await exitAndroidApplication();
+      else await desktopEvents.destroy();
+    },
+    onError: (error) => uiActions.toast(errorMessage(error), 'error'), onKey: handleGlobalShortcut
+  });
 
   function applyTheme(settings: AppSettings) {
     if (typeof document === 'undefined') return;
@@ -618,10 +666,16 @@
     root.dataset.theme = theme;
     root.style.setProperty('--accent-color', settings.accentColor);
     root.style.setProperty('--radius-md', `${settings.cornerRadius}px`);
+    if (showAndroidFolderAction) {
+      void setAndroidStatusBarAppearance(theme === 'dark').catch(error => uiActions.toast(errorMessage(error), 'error'));
+    }
   }
 
   async function renderActiveNow() {
-    const tab = getActiveTab();
+    let tab: EditorTab | null = getActiveTab();
+    // Session restoration publishes file identity first. Reading its content here
+    // would defeat deferred hydration and mount the editor during startup.
+    if (tab?.loadState === 'unloaded') return;
     if (tab?.loadState === 'loaded') {
       const useFullRender = $settingsStore.livePreviewEnabled && visiblePanes.preview;
       return markdownCoordinator.runNow({
@@ -673,7 +727,11 @@
 
   async function refreshRecentFiles() {
     try {
-      recentFiles = await api.getRecentFiles();
+      if ((await api.getPlatformCapabilities()).platform === 'android') {
+        androidRecentFiles = await androidDocuments.getRecentDocuments();
+      } else {
+        recentFiles = await api.getRecentFiles();
+      }
       return true;
     } catch (error) {
       uiActions.toast(errorMessage(error), 'error');
@@ -681,91 +739,86 @@
     }
   }
 
-  function newDocument() {
-    flushActiveEditor();
-    documentStore.newDocument();
-    uiActions.toast(t('toast.newDocument'));
-  }
-
-  async function openFile() {
-    try {
-      const path = await pickMarkdownFile();
-      if (path) {
-        await openPath(path);
-      }
-    } catch (error) {
-      uiActions.toast(errorMessage(error), 'error');
-    }
-  }
-
-  async function openPath(path: string): Promise<EditorTab | null> {
-    flushActiveEditor();
-    try {
-      const { tab, result } = await openDocumentPath(
-        path,
-        api.openMarkdownFile,
-        documentStore.openDocument,
-        refreshRecentFiles
-      );
-      const auxiliaryError = result.auxiliaryError;
-      if (auxiliaryError) {
-        uiActions.toast(t('toast.openedRecentFailed', {
-          title: result.document.title,
-          message: localizeError(auxiliaryError)
-        }), 'error');
-      } else {
-        uiActions.toast(t('toast.opened', { title: result.document.title }));
-      }
-      return tab;
-    } catch (error) {
-      uiActions.toast(errorMessage(error), 'error');
-      return null;
-    }
-  }
-
-  async function activateTab(tabId: string) {
-    flushActiveEditor();
-    documentStore.setActive(tabId);
-    await loadTabContent(tabId);
-  }
-
-  async function loadTabContent(tabId: string): Promise<EditorTab | null> {
-    const request = loadSingleFlight.run(tabId, async () => {
-      const tab = documentStore.getTab(tabId);
-      if (!tab) return null;
-      if (tab.loadState === 'loaded') return tab;
-      if (!tab.path) {
-        documentStore.markLoadFailed(tabId, t('app.noReadablePath'));
-        return null;
-      }
-
-      const requestedPath = tab.path;
-      documentStore.markLoading(tabId);
+  const androidDocuments = createAndroidDocuments();
+  async function refreshDeferredAndroidTitles(): Promise<void> {
+    const state = get(documentStore);
+    const deferred = state.tabs.filter(tab => tab.resource?.kind === 'androidDocument' &&
+      tab.loadState !== 'loaded');
+    const ordered = [...deferred.filter(tab => tab.id === state.activeTabId),
+      ...deferred.filter(tab => tab.id !== state.activeTabId)];
+    for (const tab of ordered) {
+      if (tab.resource?.kind !== 'androidDocument') continue;
       try {
-        const result = await api.openMarkdownFile(requestedPath);
-        const applied = documentStore.hydrateDocument(tabId, requestedPath, result.document);
-        if (!applied) return documentStore.getTab(tabId) ?? null;
-        await refreshRecentFiles();
-        if (result.auxiliaryError) {
-          uiActions.toast(t('toast.loadedRecentFailed', {
-            title: result.document.title,
-            message: localizeError(result.auxiliaryError)
-          }), 'error');
-        }
-        return documentStore.getTab(tabId) ?? null;
-      } catch (error) {
-        const appError = toAppError(error);
-        const message = localizeError(appError);
-        documentStore.markLoadFailed(tabId, message);
-        uiActions.toast(message, 'error');
-        return null;
+        const title = await androidDocuments.documentName(tab.resource);
+        if (title) documentStore.setDeferredResourceTitle(tab.id, tab.resource, title);
+      } catch {
+        // A revoked or unavailable provider does not prevent session restoration.
       }
-    });
-    return request.promise;
+    }
   }
+  const resourceStorage = createResourceStorage(api, androidDocuments);
+  async function pickDocumentResource(): Promise<ResourceRef | null> {
+    const capabilities = await api.getPlatformCapabilities();
+    if (capabilities.platform === 'android') return androidDocuments.pickDocument();
+    const path = await pickMarkdownFile();
+    return path ? desktopFile(path) : null;
+  }
+  async function pickSaveResource(defaultName?: string | null): Promise<ResourceRef | null> {
+    const capabilities = await api.getPlatformCapabilities();
+    if (capabilities.platform === 'android') return androidDocuments.createDocument(defaultName ?? 'Untitled.md');
+    const path = await pickMarkdownSavePath(defaultName);
+    return path ? desktopFile(path) : null;
+  }
+  async function pickWorkspaceResource(): Promise<ResourceRef | null> {
+    const capabilities = await api.getPlatformCapabilities();
+    if (capabilities.platform === 'android') return androidDocuments.pickTree();
+    const path = await pickWorkspaceDirectory();
+    return path ? { kind: 'desktopDirectory', path } : null;
+  }
+  let drainingAndroidRequests = false;
+  let drainAndroidAgain = false;
+  async function drainAndroidOpenRequests(): Promise<void> {
+    if (drainingAndroidRequests) {
+      drainAndroidAgain = true;
+      return;
+    }
+    drainingAndroidRequests = true;
+    try {
+      if ((await api.getPlatformCapabilities()).platform !== 'android') return;
+      do {
+        drainAndroidAgain = false;
+        for (const resource of await androidDocuments.drainOpenRequests()) {
+          try {
+            await openController.openResource(resource);
+          } catch (error) {
+            uiActions.toast(errorMessage(error), 'error');
+          }
+        }
+      } while (drainAndroidAgain);
+    } catch (error) {
+      uiActions.toast(errorMessage(error), 'error');
+    } finally {
+      drainingAndroidRequests = false;
+    }
+  }
+  const workspaceStore = createWorkspaceStore({
+    client: api.workspace, capabilities: api.getPlatformCapabilities,
+    pickDirectory: pickWorkspaceResource, listen: listenWorkspaceChanges,
+    open: resource => openController.openResource(resource)
+  });
+  const openController = createOpenController({
+    documentStore, storage: resourceStorage, flushEditor: flushActiveEditor, pickDocumentResource,
+    refreshRecentFiles, errorMessage, toast: uiActions.toast, confirmAction,
+    forget: (id) => saveController.forget(id)
+  });
+  const newDocument = openController.create;
+  const openFile = openController.pick;
+  function openPath(path: string) { return openController.open(path); }
+  const activateTab = openController.activate;
+  function loadTabContent(tabId: string) { return openController.load(tabId); }
 
-  async function openPreviewDocument(path: string, fragment: string | null): Promise<boolean> {
-    const tab = await openPath(path);
+  async function openPreviewDocument(resource: ResourceRef, fragment: string | null): Promise<boolean> {
+    const tab = await openController.openResource(resource);
     if (!tab) return false;
     if (!fragment) return true;
     pendingPreviewFragment = { tabId: tab.id, fragment };
@@ -776,243 +829,35 @@
     return true;
   }
 
-  async function saveActive(showToast = true) {
-    flushActiveEditor();
-    let tab = getActiveTab();
-    if (!tab) return;
-    if (tab.loadState !== 'loaded') {
-      const loadedTab = await loadTabContent(tab.id);
-      if (!loadedTab || loadedTab.loadState !== 'loaded') return;
-      tab = loadedTab;
-    }
+  const saveController = createSaveController({
+    documentStore, storage: resourceStorage, activeTab: getActiveTab, flushEditor: flushActiveEditor,
+    flushRecovery: async () => { if (isTauriRuntime()) await recoveryController.flush(); },
+    loadTab: loadTabContent, pickSaveResource, refreshRecentFiles,
+    errorMessage, toast: uiActions.toast,
+    closeModals: () => { uiActions.closeModals(); exportDialogOpen = false; },
+    onConflict: (prompt) => { saveConflictPrompt = prompt; }
+  });
+  const saveActive = saveController.saveActive;
+  const saveActiveAs = saveController.saveAs;
+  const saveTab = saveController.save;
+  const closeSaveConflictPrompt = saveController.closeConflict;
+  const reloadConflictedDocument = saveController.reload;
+  const saveConflictedCopy = saveController.saveCopy;
+  const overwriteConflictedDocument = saveController.overwrite;
+  function getDirtyExitDocuments() { return saveController.dirtyDocuments(); }
+  function saveDirtyDocumentBeforeExit(document: DirtyExitDocument) { return saveController.saveBeforeExit(document); }
 
+  async function closeApplicationWindow(discard = false) {
     try {
-      const path = tab.path ?? (await pickMarkdownSavePath(tab.title));
-      if (!path) return;
-      await saveTab(tab.id, path, showToast);
+      if (isTauriRuntime()) {
+        if (discard) await recoveryController.discardOpenCopies();
+        else await recoveryController.flush();
+      }
+      await shellController.close();
     } catch (error) {
-      uiActions.toast(errorMessage(error), 'error');
-    }
-  }
-
-  async function saveActiveAs() {
-    flushActiveEditor();
-    let tab = getActiveTab();
-    if (!tab) return;
-    if (tab.loadState !== 'loaded') {
-      const loadedTab = await loadTabContent(tab.id);
-      if (!loadedTab || loadedTab.loadState !== 'loaded') return;
-      tab = loadedTab;
-    }
-
-    try {
-      const path = await pickMarkdownSavePath(tab.path ?? tab.title);
-      if (!path) return;
-      await saveTab(tab.id, path, true);
-    } catch (error) {
-      uiActions.toast(errorMessage(error), 'error');
-    }
-  }
-
-  async function saveTab(
-    tabId: string,
-    path: string,
-    showToast: boolean,
-    overwriteExternalChanges = false
-  ): Promise<boolean> {
-    if (tabId === getActiveTab()?.id) flushActiveEditor();
-    const request = saveSingleFlight.run(tabId, async () => {
-      const result = await saveDocumentSnapshot(tabId, path, {
-        getTab: documentStore.getTab,
-        resolveFileVersion: api.resolveFileVersion,
-        getFileOwner: documentStore.getFileOwner,
-        activateTab: documentStore.setActive,
-        saveFile: api.saveMarkdownFile,
-        markSaved: documentStore.markSaved
-      }, overwriteExternalChanges);
-      if (!result) return null;
-      await refreshRecentFiles();
-      return result;
-    });
-
-    try {
-      const result = await request.promise;
-      if (!result) return false;
-      const saved = result.document;
-
-      const current = documentStore.getTab(tabId);
-      if (!request.started && current) {
-        const requestedVersion = await api.resolveFileVersion(path, true);
-        const matchesRequestedTarget = requestedVersion
-          ? isSameFileIdentity(current.fileIdentity, requestedVersion.fileIdentity)
-          : isSameFilePath(current.path, path);
-        if (current.isDirty || !matchesRequestedTarget) {
-          return saveTab(tabId, path, showToast);
-        }
-      }
-
-      const savedMessage = current?.isDirty
-        ? t('toast.savedSnapshot', { title: saved.title })
-        : t('toast.saved', { title: saved.title });
-      if (result.auxiliaryError) {
-        const failureKey = `${result.auxiliaryError.code}:${result.auxiliaryError.message}`;
-        if (showToast || autosaveFailureKeys.get(tabId) !== failureKey) {
-          uiActions.toast(t('toast.savedRecentFailed', {
-            saved: savedMessage,
-            message: localizeError(result.auxiliaryError)
-          }), 'error');
-        }
-        if (current) autosaveFailureKeys.set(tabId, failureKey);
-      } else {
-        autosaveFailureKeys.delete(tabId);
-        autosaveConflictTabs.delete(tabId);
-        if (showToast) {
-          uiActions.toast(savedMessage, current?.isDirty ? 'info' : 'success');
-        }
-      }
-      return Boolean(
-        current &&
-          !current.isDirty &&
-          isSameFileIdentity(current.fileIdentity, saved.fileIdentity)
-      );
-    } catch (error) {
-      const appError = toAppError(error);
-      if (appError.code === 'FILE_CONTENT_CHANGED' || appError.code === 'FILE_TARGET_CHANGED') {
-        const current = documentStore.getTab(tabId);
-        if (current) {
-          autosaveConflictTabs.add(tabId);
-          uiActions.closeModals();
-          exportDialogOpen = false;
-          saveConflictPrompt = { tabId, path, title: current.title, busy: false };
-        }
-      }
-      const failureKey = `${appError.code}:${appError.message}`;
-      if (showToast || autosaveFailureKeys.get(tabId) !== failureKey) {
-        uiActions.toast(localizeError(appError), 'error');
-      }
-      if (documentStore.getTab(tabId)) autosaveFailureKeys.set(tabId, failureKey);
-      return false;
-    }
-  }
-
-  function closeSaveConflictPrompt(): void {
-    if (!saveConflictPrompt?.busy) saveConflictPrompt = null;
-  }
-
-  async function reloadConflictedDocument(): Promise<void> {
-    flushActiveEditor();
-    const prompt = saveConflictPrompt;
-    if (!prompt || prompt.busy) return;
-    saveConflictPrompt = { ...prompt, busy: true };
-    try {
-      const result = await api.openMarkdownFile(prompt.path);
-      if (!documentStore.reloadDocument(prompt.tabId, prompt.path, result.document)) {
-        throw Object.assign(new Error('The conflicted tab changed before reload completed.'), {
-          code: 'FILE_IDENTITY_CONFLICT'
-        });
-      }
-      autosaveConflictTabs.delete(prompt.tabId);
-      autosaveFailureKeys.delete(prompt.tabId);
-      saveConflictPrompt = null;
-      if (result.auxiliaryError) uiActions.toast(localizeError(result.auxiliaryError), 'error');
-    } catch (error) {
-      saveConflictPrompt = { ...prompt, busy: false };
-      uiActions.toast(errorMessage(error), 'error');
-    }
-  }
-
-  async function saveConflictedCopy(): Promise<void> {
-    const prompt = saveConflictPrompt;
-    if (!prompt || prompt.busy) return;
-    try {
-      const path = await pickMarkdownSavePath(prompt.title);
-      if (!path) return;
-      saveConflictPrompt = { ...prompt, busy: true };
-      const saved = await saveTab(prompt.tabId, path, true);
-      if (saved) {
-        autosaveConflictTabs.delete(prompt.tabId);
-        saveConflictPrompt = null;
-      } else if (saveConflictPrompt?.tabId === prompt.tabId && saveConflictPrompt.busy) {
-        saveConflictPrompt = { ...prompt, busy: false };
-      }
-    } catch (error) {
-      saveConflictPrompt = { ...prompt, busy: false };
-      uiActions.toast(errorMessage(error), 'error');
-    }
-  }
-
-  async function overwriteConflictedDocument(): Promise<void> {
-    const prompt = saveConflictPrompt;
-    if (!prompt || prompt.busy) return;
-    saveConflictPrompt = { ...prompt, busy: true };
-    const saved = await saveTab(prompt.tabId, prompt.path, true, true);
-    if (saved) {
-      autosaveConflictTabs.delete(prompt.tabId);
-      saveConflictPrompt = null;
-    } else if (saveConflictPrompt?.tabId === prompt.tabId && saveConflictPrompt.busy) {
-      saveConflictPrompt = { ...prompt, busy: false };
-    }
-  }
-
-  function getDirtyExitDocuments(): DirtyExitDocument[] {
-    return get(documentStore)
-      .tabs.filter((tab) => tab.isDirty)
-      .map((tab) => ({
-        id: tab.id,
-        title: tab.title,
-        path: tab.path,
-        contentRevision: tab.contentRevision
-      }));
-  }
-
-  async function saveDirtyDocumentBeforeExit(document: DirtyExitDocument): Promise<boolean> {
-    const tab = documentStore.getTab(document.id);
-    if (!tab || !tab.isDirty) return true;
-    if (tab.loadState !== 'loaded') {
-      uiActions.toast(t('toast.unloadedCannotSave', { title: tab.title }), 'error');
-      return false;
-    }
-
-    try {
-      const path = tab.path ?? (await pickMarkdownSavePath(tab.title));
-      if (!path) {
-        uiActions.toast(t('toast.saveCancelled', { title: tab.title }), 'info');
-        return false;
-      }
-
-      const saved = await saveTab(tab.id, path, true);
-      if (!saved) {
-        const current = documentStore.getTab(tab.id);
-        if (current?.isDirty) {
-          uiActions.toast(t('toast.stillDirty', { title: current.title }), 'info');
-        }
-      }
-      return saved;
-    } catch (error) {
-      uiActions.toast(t('toast.saveFailed', { title: tab.title, message: errorMessage(error) }), 'error');
-      return false;
-    }
-  }
-
-  async function closeApplicationWindow(): Promise<void> {
-    flushActiveEditor();
-    sessionCoordinator.queue({
-      enabled: get(settingsStore).restoreLastSession,
-      session: currentSessionSnapshot(get(documentStore))
-    });
-    await sessionCoordinator.flush();
-
-    allowBrowserUnload = true;
-    try {
-      await getCurrentWindow().destroy();
-    } catch (error) {
-      allowBrowserUnload = false;
+      recoveryController.resume();
       throw error;
     }
-
-    window.setTimeout(() => {
-      allowBrowserUnload = false;
-    }, 500);
   }
 
   function openExportDialog(): void {
@@ -1029,6 +874,11 @@
   }
 
   const openSettingsDialogRequest = () => openStoreModal(uiActions.openSettings);
+  async function onDiagramRuntimeChanged() {
+    const { previewDiagramRuntime } = await import('../lib/previewDiagramRuntime');
+    previewDiagramRuntime.reset();
+    previewRef?.refreshDiagrams();
+  }
   const openCommandPaletteRequest = () => openStoreModal(uiActions.openCommandPalette);
   const openAboutDialogRequest = () => openStoreModal(uiActions.openAbout);
   const openMarkdownGuideRequest = () => openStoreModal(uiActions.openMarkdownGuide);
@@ -1037,102 +887,19 @@
     if (!exportBusy) exportDialogOpen = false;
   }
 
-  async function cancelImageExport() {
-    const job = imageExportJob;
-    if (!job || job.cancelRequested) return;
-    imageExportJob = { ...job, cancelRequested: true };
-    const pending = imageExportJob;
-    try {
-      // Registration happens in the backend. Retry only while this invocation is live.
-      while (imageExportJob === pending && pending.executing) {
-        if (await api.cancelPngExport(pending.id)) return;
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-    } catch (error) {
-      uiActions.toast(errorMessage(error), 'error');
-    }
-  }
-
-  async function exportDocument(format: ExportFormat, options: ExportOptions) {
-    flushActiveEditor();
-    let tab = getActiveTab();
-    if (!tab) return;
-    exportBusy = true;
-    const jobId = createExportJobId();
-    const task = new ExportProgressTask(jobId, format, (view) => { exportProgress = view; });
-    exportTask = task;
-    if (format === 'png') imageExportJob = { id: jobId, executing: false, cancelRequested: false };
-    try {
-      if (isTauriRuntime()) {
-        try { await task.subscribe((receive) => getCurrentWindow().listen('document-export-progress', (event) => receive(event.payload))); }
-        catch (error) { console.warn('Export progress subscription unavailable', error); }
-      }
-      if (tab.loadState !== 'loaded') {
-        const loadedTab = await loadTabContent(tab.id);
-        if (!loadedTab || loadedTab.loadState !== 'loaded') return;
-        tab = loadedTab;
-      }
-      task.phase(format === 'svg' ? 'rendering' : 'snapshot');
-      const exportSource = format === 'svg'
-        ? {
-            ...tab,
-            mindMapSvg: serializeMindMapSvg(
-              tab.title,
-              (await api.analyzeMarkdown(tab.content)).outline
-            )
-          }
-        : { ...tab };
-      const locationWarnings: string[] = [];
-      const result = await runExportJob(
-        exportSource,
-        format,
-        options,
-        async (defaultPath) => {
-          if (format !== 'png') return pickExportSavePath(format, defaultPath);
-          const parent = exportSource.path ? null : await pickExportParentDirectory();
-          if ((!exportSource.path && !parent) || imageExportJob?.cancelRequested) return null;
-          return api.resolvePngExportDirectory(exportSource.path, exportSource.title, parent);
-        },
-        async (request) => {
-          if (format === 'png' && imageExportJob) {
-            if (imageExportJob.cancelRequested) throw { code: 'EXPORT_CANCELLED', message: 'Image export cancelled' };
-            imageExportJob.executing = true;
-          }
-          return api.exportDocument(request);
-        },
-        jobId,
-        {
-          suggest: api.suggestExportPath,
-          remember: api.rememberExportDirectory,
-          onWarning: (error) => locationWarnings.push(errorMessage(error))
-        },
-        (stage) => task.phase(stage)
-      );
-      if (!result) {
-        task.finish('cancelled');
-        exportDialogOpen = false;
-        if (locationWarnings.length) uiActions.toast(locationWarnings.join('\n'), 'error');
-        return;
-      }
-      task.finish('succeeded');
-      exportDialogOpen = false;
-      lastExportWarnings = result.warnings.length ? exportWarningReport(exportSource, result) : null;
-      const successMessage = result.warnings.length
-        ? t('export.successWarnings', { format: format.toUpperCase(), count: result.warnings.length })
-        : t('export.success', { format: format.toUpperCase() });
-      uiActions.toast([successMessage, ...(format === 'png' ? [result.path] : []), ...locationWarnings].join('\n'));
-    } catch (error) {
-      const cancelled = toAppError(error).code === 'EXPORT_CANCELLED';
-      task.finish(cancelled ? 'cancelled' : 'failed');
-      uiActions.toast(errorMessage(error), cancelled ? 'info' : 'error');
-    } finally {
-      task.dispose();
-      exportTask = null;
-      exportProgress = null;
-      exportBusy = false;
-      imageExportJob = null;
-    }
-  }
+  const exportController = createExportController({
+    api, flushEditor: flushActiveEditor, activeTab: getActiveTab, loadTab: loadTabContent,
+    pickExportSavePath, pickExportParentDirectory,
+    subscribe: isTauriRuntime() ? listenExportProgress : undefined,
+    errorMessage, toast: uiActions.toast,
+    setBusy: (busy) => { exportBusy = busy; },
+    setProgress: (view) => { exportProgress = view; },
+    setCancelRequested: (requested) => { exportCancelRequested = requested; },
+    closeDialog: () => { exportDialogOpen = false; },
+    setWarnings: (warnings) => { lastExportWarnings = warnings; }
+  });
+  const exportDocument = exportController.run;
+  const cancelActiveExport = exportController.cancel;
 
   async function exportStartupDiagnostics() {
     try {
@@ -1162,59 +929,10 @@
     }
   }
 
-  async function closeTab(tab: EditorTab) {
-    flushActiveEditor();
-    const current = documentStore.getTab(tab.id);
-    if (!current) return;
-    if (current.isDirty) {
-      const confirmed = await confirmAction(
-        t('confirm.unsavedClose.message', { title: current.title }),
-        t('confirm.unsavedClose.title')
-      );
-      if (!confirmed) return;
-    }
-    documentStore.closeTab(current.id);
-    autosaveFailureKeys.delete(current.id);
-  }
-
-  async function closeTabById(tabId: string) {
-    const tab = documentStore.getTab(tabId);
-    if (tab) await closeTab(tab);
-  }
-
-  async function closeOtherTabs(sourceTabId: string) {
-    const state = get(documentStore);
-    const targets = state.tabs.filter((tab) => tab.id !== sourceTabId);
-    await closeTabGroup(targets, sourceTabId, t('tabs.closeOthers'));
-  }
-
-  async function closeRightTabs(sourceTabId: string) {
-    const state = get(documentStore);
-    const sourceIndex = state.tabs.findIndex((tab) => tab.id === sourceTabId);
-    if (sourceIndex < 0) return;
-    await closeTabGroup(state.tabs.slice(sourceIndex + 1), sourceTabId, t('tabs.closeRight'));
-  }
-
-  async function closeTabGroup(tabs: EditorTab[], preferredActiveId: string, actionTitle: string) {
-    flushActiveEditor();
-    const currentTabs = tabs
-      .map((tab) => documentStore.getTab(tab.id))
-      .filter((tab): tab is EditorTab => Boolean(tab));
-    if (!currentTabs.length) return;
-    const dirtyTabs = currentTabs.filter((tab) => tab.isDirty);
-    if (dirtyTabs.length) {
-      const confirmed = await confirmAction(
-        t('confirm.dirtyTabs', { count: dirtyTabs.length, action: actionTitle }),
-        actionTitle
-      );
-      if (!confirmed) return;
-    }
-    documentStore.closeTabs(
-      currentTabs.map((tab) => tab.id),
-      preferredActiveId
-    );
-    for (const tab of currentTabs) autosaveFailureKeys.delete(tab.id);
-  }
+  const closeTab = openController.close;
+  const closeTabById = openController.closeById;
+  const closeOtherTabs = openController.closeOthers;
+  const closeRightTabs = openController.closeRight;
 
   function setLayoutMode(mode: LayoutMode) {
     flushActiveEditor();
@@ -1250,7 +968,7 @@
     editorRef?.scrollToLine(line);
   }
 
-  function handleEditorSession(tabId: string, state: import('../lib/editorSession').SerializedEditorState) {
+  function handleEditorSession(tabId: string, state: import('../lib/editorSession').EditorSnapshot) {
     documentStore.updateEditorState(tabId, state);
   }
 
@@ -1273,6 +991,14 @@
     }
   }
 
+  async function removeAndroidRecent(resource: ResourceRef) {
+    try {
+      androidRecentFiles = await androidDocuments.removeRecentDocument(resource);
+    } catch (error) {
+      uiActions.toast(errorMessage(error), 'error');
+    }
+  }
+
   async function revealRecent(path: string) {
     try {
       await api.showInFileManager(path);
@@ -1290,7 +1016,8 @@
     }
     if (!saved.restoreLastSession) {
       try {
-        await api.clearSession();
+        if (resourceSessionMode) await api.clearResourceSession();
+        else await api.clearSession();
         sessionCoordinator.setWritable(true);
       } catch (error) {
         sessionCoordinator.setWritable(false);
@@ -1348,7 +1075,7 @@
       'layout-edit': () => setLayoutMode('edit'),
       'layout-split': () => setLayoutMode('split'),
       'layout-preview': () => setLayoutMode('preview'),
-      sidebar: uiActions.toggleSidebar,
+      sidebar: toggleSidebar,
       settings: openSettingsDialogRequest,
       'command-palette': openCommandPaletteRequest,
       'export-startup-diagnostics': () => void exportStartupDiagnostics(),
@@ -1371,7 +1098,10 @@
 </svelte:head>
 
 <div
+  bind:this={shellElement}
   class="app-shell"
+  class:android-mobile={showAndroidFolderAction}
+  class:android-ime-compact={compactAndroidIme}
   data-marklite-ready={initializationComplete ? 'true' : undefined}
   aria-label={$translator('app.ariaLabel')}
 >
@@ -1382,17 +1112,34 @@
     sidebarVisible={effectiveSidebarVisible}
     onNew={newDocument}
     onOpen={() => void openFile()}
+    onOpenFolder={() => void workspaceStore.choose()}
+    showFolderAction={showAndroidFolderAction}
+    mobile={showAndroidFolderAction && narrowViewport}
+    recoveryAvailable={recoveryInventory.entries.length > 0 || recoveryInventory.issues.length > 0}
+    recoveryCount={recoveryInventory.entries.length}
+    onOpenRecovery={() => (recoveryPanelOpen = true)}
+    bind:moreOpen={mobileMenuOpen}
     onSave={() => void saveActive()}
     onSaveAs={() => void saveActiveAs()}
     onExport={openExportDialog}
     onFind={() => editorRef?.openFind()}
     onSettings={openSettingsDialogRequest}
-    onToggleSidebar={uiActions.toggleSidebar}
+    onToggleSidebar={toggleSidebar}
     onLayout={setLayoutMode}
     onCommandPalette={openCommandPaletteRequest}
     onMarkdownGuide={openMarkdownGuideRequest}
     onAbout={openAboutDialogRequest}
   />
+  {#if desktopUpdates}
+    <UpdateBanner
+      state={updateView}
+      onDownload={() => void updateService?.download()}
+      onInstall={() => void updateService?.install()}
+      onDismiss={() => void updateService?.dismiss()}
+      onSkip={() => void updateService?.dismiss(true)}
+      onOpenReleases={() => void openRepository('https://github.com/Vazone/Marklite/releases/latest')}
+    />
+  {/if}
 
   <DocumentTabBar
     tabs={$tabBarState.tabs}
@@ -1424,23 +1171,33 @@
     class:no-sidebar={!effectiveSidebarVisible}
     style={`--sidebar-width: ${$uiStore.sidebarWidth.toFixed(2)}px;`}
   >
+    {#if showAndroidFolderAction && narrowViewport && mobileDrawerOpen}
+      <button class="mobile-sidebar-backdrop" type="button" aria-label={$translator('titlebar.sidebar.collapse')} on:click={collapseSidebar}></button>
+    {/if}
     {#if effectiveSidebarVisible}
       <Sidebar
         activeSidebarTab={$uiStore.sidebarTab}
         {recentFiles}
+        {androidRecentFiles}
+        activeResource={$activePreview?.resource ?? null}
         tab={$activeSidebar}
         onTabChange={uiActions.setSidebarTab}
         onOpenRecent={(path) => void openPath(path)}
         onRemoveRecent={(path) => void removeRecent(path)}
         onRevealRecent={(path) => void revealRecent(path)}
+        onOpenAndroidRecent={(resource) => void openController.openResource(resource)}
+        onRemoveAndroidRecent={(resource) => void removeAndroidRecent(resource)}
         onJumpToLine={jumpToLine}
-        onCollapse={uiActions.collapseSidebar}
-      />
+        onCollapse={collapseSidebar}
+      >
+        <WorkspacePanel slot="files" store={workspaceStore} activePath={$activeSidebar?.path ?? null}
+          onRevealPath={(path) => void revealRecent(path)} />
+      </Sidebar>
       <SidebarResizeSeparator
         width={$uiStore.sidebarWidth}
         onWidthChange={uiActions.setSidebarWidth}
         onCommit={uiActions.commitSidebarWidth}
-        onCollapse={uiActions.collapseSidebar}
+        onCollapse={collapseSidebar}
       />
     {/if}
 
@@ -1480,6 +1237,7 @@
                   tabId={$activeEditor.id}
                   value={$activeEditor.content}
                   settings={$settingsStore}
+                  mobile={showAndroidFolderAction}
                   serializedState={$activeEditor.editorState}
                   initialScrollPosition={$activeEditor.scrollPosition}
                   onChange={handleContentChange}
@@ -1517,8 +1275,10 @@
               virtualPreview={$activePreview.virtualPreview}
               diagrams={$activePreview.diagrams}
               diagramDiagnostics={$activePreview.diagramDiagnostics}
+              markdownDiagnostics={$activePreview.analysisRevision === $activePreview.contentRevision ? $activePreview.markdownDiagnostics ?? [] : []}
               settings={$settingsStore}
-              documentPath={$activePreview.path}
+              mobile={showAndroidFolderAction}
+              documentResource={$activePreview.resource}
               documentTitle={$activePreview.title}
               outline={$activePreview.outline}
               onOpenDocument={openPreviewDocument}
@@ -1538,6 +1298,7 @@
     <StatusBar
       tab={$activeStatus}
       layoutMode={$uiStore.layoutMode}
+      mobile={showAndroidFolderAction && narrowViewport}
     />
   {/if}
 </div>
@@ -1548,6 +1309,9 @@
     open
     settings={$settingsStore}
     busy={$settingsOperationBusy}
+    {desktopUpdates}
+    {desktopDiagramPack}
+    {onDiagramRuntimeChanged}
     onSave={saveSettings}
     onReset={resetSettings}
     onClose={uiActions.closeSettings}
@@ -1568,9 +1332,12 @@
     open
     busy={exportBusy}
     progress={exportProgress}
-    onCancel={() => void cancelImageExport()}
-    cancelRequested={imageExportJob?.cancelRequested ?? false}
+    onCancel={() => void cancelActiveExport()}
+    cancelRequested={exportCancelRequested}
     documentTitle={$activeShell?.title ?? ''}
+    {availableExportFormats}
+    {allowLocalImageExport}
+    {androidExport}
     onExport={(format, options) => void exportDocument(format, options)}
     onClose={closeExportDialog}
   />
@@ -1591,6 +1358,8 @@
     onExportDiagnostics={() => void exportStartupDiagnostics()}
     onClearDiagnostics={() => void clearStartupDiagnostics()}
     onOpenRepository={(url) => void openRepository(url)}
+    {desktopUpdates}
+    onCheckUpdates={() => void checkUpdatesManually()}
   />
 {/if}
 
@@ -1644,3 +1413,8 @@
     </button>
   {/each}
 </div>
+
+<RecoveryPanel inventory={recoveryInventory} bind:open={recoveryPanelOpen}
+  showNotice={!showAndroidFolderAction || !narrowViewport} onRestore={recoveryController.restore}
+  onDiscard={recoveryController.discard} onInspect={recoveryController.inspect}
+  onError={error => uiActions.toast(errorMessage(error), 'error')} />

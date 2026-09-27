@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DocumentOperationDto } from './tauriApi';
+import { desktopFile } from './platform/resources';
 import {
   saveDocumentSnapshot,
   type DocumentSaveDependencies,
@@ -10,6 +11,7 @@ function operation(fileIdentity = 'file:saved'): DocumentOperationDto {
   return {
     document: {
       path: 'C:\\docs\\saved.md',
+      resource: desktopFile('C:\\docs\\saved.md'),
       fileIdentity,
       contentVersion: 'sha256:saved',
       title: 'saved.md',
@@ -29,6 +31,7 @@ function dependencies(
     getTab: vi.fn((): SaveableTabSnapshot => ({
       id: 'tab-a',
       path: 'C:\\docs\\saved.md',
+      resource: desktopFile('C:\\docs\\saved.md'),
       fileIdentity: 'file:target',
       contentVersion: 'sha256:opened',
       loadState: 'loaded',
@@ -51,12 +54,12 @@ describe('saveDocumentSnapshot', () => {
   it('passes the observed target identity into the atomic backend save', async () => {
     const deps = dependencies();
 
-    await expect(saveDocumentSnapshot('tab-a', 'C:\\docs\\saved.md', deps)).resolves.toEqual(
+    await expect(saveDocumentSnapshot('tab-a', desktopFile('C:\\docs\\saved.md'), deps)).resolves.toEqual(
       operation()
     );
 
     expect(deps.saveFile).toHaveBeenCalledWith(
-      'C:\\docs\\saved.md',
+      desktopFile('C:\\docs\\saved.md'),
       '# snapshot',
       'file:target',
       'sha256:opened',
@@ -74,7 +77,7 @@ describe('saveDocumentSnapshot', () => {
       saveFile
     });
 
-    await expect(saveDocumentSnapshot('tab-a', 'C:\\docs\\saved.md', deps)).rejects.toMatchObject({
+    await expect(saveDocumentSnapshot('tab-a', desktopFile('C:\\docs\\saved.md'), deps)).rejects.toMatchObject({
       code: 'FILE_ALREADY_OPEN'
     });
     expect(activateTab).toHaveBeenCalledWith('tab-owner');
@@ -84,7 +87,7 @@ describe('saveDocumentSnapshot', () => {
   it('rejects a store ownership conflict instead of reporting a false success', async () => {
     const deps = dependencies({ markSaved: vi.fn(() => false) });
 
-    await expect(saveDocumentSnapshot('tab-a', 'C:\\docs\\saved.md', deps)).rejects.toMatchObject({
+    await expect(saveDocumentSnapshot('tab-a', desktopFile('C:\\docs\\saved.md'), deps)).rejects.toMatchObject({
       code: 'FILE_IDENTITY_CONFLICT'
     });
   });
@@ -96,7 +99,7 @@ describe('saveDocumentSnapshot', () => {
     });
     const deps = dependencies({ saveFile, markSaved });
 
-    await expect(saveDocumentSnapshot('tab-a', 'C:\\docs\\saved.md', deps)).rejects.toMatchObject({
+    await expect(saveDocumentSnapshot('tab-a', desktopFile('C:\\docs\\saved.md'), deps)).rejects.toMatchObject({
       code: 'FILE_CONTENT_CHANGED'
     });
     expect(markSaved).not.toHaveBeenCalled();
@@ -112,7 +115,7 @@ describe('saveDocumentSnapshot', () => {
       saveFile
     });
 
-    await expect(saveDocumentSnapshot('tab-a', 'C:\\docs\\saved.md', deps)).rejects.toMatchObject({
+    await expect(saveDocumentSnapshot('tab-a', desktopFile('C:\\docs\\saved.md'), deps)).rejects.toMatchObject({
       code: 'FILE_TARGET_CHANGED'
     });
     expect(saveFile).not.toHaveBeenCalled();
@@ -126,10 +129,10 @@ describe('saveDocumentSnapshot', () => {
       }))
     });
 
-    await saveDocumentSnapshot('tab-a', 'C:\\docs\\other.md', deps);
+    await saveDocumentSnapshot('tab-a', desktopFile('C:\\docs\\other.md'), deps);
 
     expect(deps.saveFile).toHaveBeenCalledWith(
-      'C:\\docs\\other.md',
+      desktopFile('C:\\docs\\other.md'),
       '# snapshot',
       'file:other-target',
       'sha256:other',
@@ -145,14 +148,30 @@ describe('saveDocumentSnapshot', () => {
       }))
     });
 
-    await saveDocumentSnapshot('tab-a', 'C:\\docs\\saved.md', deps, true);
+    await saveDocumentSnapshot('tab-a', desktopFile('C:\\docs\\saved.md'), deps, true);
 
     expect(deps.saveFile).toHaveBeenCalledWith(
-      'C:\\docs\\saved.md',
+      desktopFile('C:\\docs\\saved.md'),
       '# snapshot',
       'file:replacement',
       'sha256:replacement',
       true
     );
+  });
+
+  it('uses a content URI as the original target without interpreting it as a desktop path', async () => {
+    const resource = { kind: 'androidDocument' as const, uri: 'content://provider/document/a.md' };
+    const saveFile = vi.fn(async () => operation('android:target'));
+    const deps = dependencies({
+      getTab: vi.fn((): SaveableTabSnapshot => ({ id: 'tab-a', path: null, resource, fileIdentity: 'android:target',
+        contentVersion: 'sha256:opened', loadState: 'loaded', content: '# snapshot', contentRevision: 4 })),
+      resolveFileVersion: vi.fn(async () => ({ fileIdentity: 'android:replacement', contentVersion: 'sha256:other' })),
+      saveFile
+    });
+
+    await expect(saveDocumentSnapshot('tab-a', resource, deps)).rejects.toMatchObject({
+      code: 'FILE_TARGET_CHANGED'
+    });
+    expect(saveFile).not.toHaveBeenCalled();
   });
 });

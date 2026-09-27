@@ -67,4 +67,12 @@ describe('source block scroll mapping', () => {
     expect(findSourceBlockTarget(map!, 23).element.textContent).toBe('After');
     expect(buildSourceBlockScrollMap(blocks, [...elements].reverse())).toBeNull();
   });
+  test('removes and maps markers nested inside an HTML table cell', () => {
+    const template = document.createElement('template');
+    template.innerHTML = '<table><tr><td>\ue000MARKLITE_BLOCK_4\ue001<pre><code>flowchart TD</code></pre></td></tr></table>';
+    tagSourceBlockElements(template.content);
+    expect(template.content.textContent).not.toContain('MARKLITE_BLOCK');
+    expect(template.content.querySelector('pre')?.getAttribute('data-marklite-source-block')).toBe('4');
+  });
+
 });

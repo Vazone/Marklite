@@ -1,0 +1,1334 @@
+[
+  {
+    "id": "alpha",
+    "source": "\\alpha",
+    "mathml": [
+      "α"
+    ],
+    "omml": [
+      "α"
+    ]
+  },
+  {
+    "id": "beta",
+    "source": "\\beta",
+    "mathml": [
+      "β"
+    ],
+    "omml": [
+      "β"
+    ]
+  },
+  {
+    "id": "gamma",
+    "source": "\\gamma",
+    "mathml": [
+      "γ"
+    ],
+    "omml": [
+      "γ"
+    ]
+  },
+  {
+    "id": "delta",
+    "source": "\\delta",
+    "mathml": [
+      "δ"
+    ],
+    "omml": [
+      "δ"
+    ]
+  },
+  {
+    "id": "epsilon",
+    "source": "\\epsilon",
+    "mathml": [
+      "ϵ"
+    ],
+    "omml": [
+      "ϵ"
+    ]
+  },
+  {
+    "id": "varepsilon",
+    "source": "\\varepsilon",
+    "mathml": [
+      "ε"
+    ],
+    "omml": [
+      "ε"
+    ]
+  },
+  {
+    "id": "zeta",
+    "source": "\\zeta",
+    "mathml": [
+      "ζ"
+    ],
+    "omml": [
+      "ζ"
+    ]
+  },
+  {
+    "id": "eta",
+    "source": "\\eta",
+    "mathml": [
+      "η"
+    ],
+    "omml": [
+      "η"
+    ]
+  },
+  {
+    "id": "theta",
+    "source": "\\theta",
+    "mathml": [
+      "θ"
+    ],
+    "omml": [
+      "θ"
+    ]
+  },
+  {
+    "id": "vartheta",
+    "source": "\\vartheta",
+    "mathml": [
+      "ϑ"
+    ],
+    "omml": [
+      "ϑ"
+    ]
+  },
+  {
+    "id": "iota",
+    "source": "\\iota",
+    "mathml": [
+      "ι"
+    ],
+    "omml": [
+      "ι"
+    ]
+  },
+  {
+    "id": "kappa",
+    "source": "\\kappa",
+    "mathml": [
+      "κ"
+    ],
+    "omml": [
+      "κ"
+    ]
+  },
+  {
+    "id": "lambda",
+    "source": "\\lambda",
+    "mathml": [
+      "λ"
+    ],
+    "omml": [
+      "λ"
+    ]
+  },
+  {
+    "id": "mu",
+    "source": "\\mu",
+    "mathml": [
+      "μ"
+    ],
+    "omml": [
+      "μ"
+    ]
+  },
+  {
+    "id": "nu",
+    "source": "\\nu",
+    "mathml": [
+      "ν"
+    ],
+    "omml": [
+      "ν"
+    ]
+  },
+  {
+    "id": "xi",
+    "source": "\\xi",
+    "mathml": [
+      "ξ"
+    ],
+    "omml": [
+      "ξ"
+    ]
+  },
+  {
+    "id": "pi",
+    "source": "\\pi",
+    "mathml": [
+      "π"
+    ],
+    "omml": [
+      "π"
+    ]
+  },
+  {
+    "id": "varpi",
+    "source": "\\varpi",
+    "mathml": [
+      "ϖ"
+    ],
+    "omml": [
+      "ϖ"
+    ]
+  },
+  {
+    "id": "rho",
+    "source": "\\rho",
+    "mathml": [
+      "ρ"
+    ],
+    "omml": [
+      "ρ"
+    ]
+  },
+  {
+    "id": "varrho",
+    "source": "\\varrho",
+    "mathml": [
+      "ϱ"
+    ],
+    "omml": [
+      "ϱ"
+    ]
+  },
+  {
+    "id": "sigma",
+    "source": "\\sigma",
+    "mathml": [
+      "σ"
+    ],
+    "omml": [
+      "σ"
+    ]
+  },
+  {
+    "id": "varsigma",
+    "source": "\\varsigma",
+    "mathml": [
+      "ς"
+    ],
+    "omml": [
+      "ς"
+    ]
+  },
+  {
+    "id": "tau",
+    "source": "\\tau",
+    "mathml": [
+      "τ"
+    ],
+    "omml": [
+      "τ"
+    ]
+  },
+  {
+    "id": "upsilon",
+    "source": "\\upsilon",
+    "mathml": [
+      "υ"
+    ],
+    "omml": [
+      "υ"
+    ]
+  },
+  {
+    "id": "phi",
+    "source": "\\phi",
+    "mathml": [
+      "ϕ"
+    ],
+    "omml": [
+      "ϕ"
+    ]
+  },
+  {
+    "id": "varphi",
+    "source": "\\varphi",
+    "mathml": [
+      "φ"
+    ],
+    "omml": [
+      "φ"
+    ]
+  },
+  {
+    "id": "chi",
+    "source": "\\chi",
+    "mathml": [
+      "χ"
+    ],
+    "omml": [
+      "χ"
+    ]
+  },
+  {
+    "id": "psi",
+    "source": "\\psi",
+    "mathml": [
+      "ψ"
+    ],
+    "omml": [
+      "ψ"
+    ]
+  },
+  {
+    "id": "omega",
+    "source": "\\omega",
+    "mathml": [
+      "ω"
+    ],
+    "omml": [
+      "ω"
+    ]
+  },
+  {
+    "id": "Gamma",
+    "source": "\\Gamma",
+    "mathml": [
+      "Γ"
+    ],
+    "omml": [
+      "Γ"
+    ]
+  },
+  {
+    "id": "Delta",
+    "source": "\\Delta",
+    "mathml": [
+      "Δ"
+    ],
+    "omml": [
+      "Δ"
+    ]
+  },
+  {
+    "id": "Theta",
+    "source": "\\Theta",
+    "mathml": [
+      "Θ"
+    ],
+    "omml": [
+      "Θ"
+    ]
+  },
+  {
+    "id": "Lambda",
+    "source": "\\Lambda",
+    "mathml": [
+      "Λ"
+    ],
+    "omml": [
+      "Λ"
+    ]
+  },
+  {
+    "id": "Xi",
+    "source": "\\Xi",
+    "mathml": [
+      "Ξ"
+    ],
+    "omml": [
+      "Ξ"
+    ]
+  },
+  {
+    "id": "Pi",
+    "source": "\\Pi",
+    "mathml": [
+      "Π"
+    ],
+    "omml": [
+      "Π"
+    ]
+  },
+  {
+    "id": "Sigma",
+    "source": "\\Sigma",
+    "mathml": [
+      "Σ"
+    ],
+    "omml": [
+      "Σ"
+    ]
+  },
+  {
+    "id": "Upsilon",
+    "source": "\\Upsilon",
+    "mathml": [
+      "Υ"
+    ],
+    "omml": [
+      "Υ"
+    ]
+  },
+  {
+    "id": "Phi",
+    "source": "\\Phi",
+    "mathml": [
+      "Φ"
+    ],
+    "omml": [
+      "Φ"
+    ]
+  },
+  {
+    "id": "Psi",
+    "source": "\\Psi",
+    "mathml": [
+      "Ψ"
+    ],
+    "omml": [
+      "Ψ"
+    ]
+  },
+  {
+    "id": "Omega",
+    "source": "\\Omega",
+    "mathml": [
+      "Ω"
+    ],
+    "omml": [
+      "Ω"
+    ]
+  },
+  {
+    "id": "cdot",
+    "source": "a \\cdot b",
+    "mathml": [
+      "·"
+    ],
+    "omml": [
+      "⋅"
+    ]
+  },
+  {
+    "id": "times",
+    "source": "a \\times b",
+    "mathml": [
+      "×"
+    ],
+    "omml": [
+      "×"
+    ]
+  },
+  {
+    "id": "div",
+    "source": "a \\div b",
+    "mathml": [
+      "÷"
+    ],
+    "omml": [
+      "÷"
+    ]
+  },
+  {
+    "id": "pm",
+    "source": "a \\pm b",
+    "mathml": [
+      "±"
+    ],
+    "omml": [
+      "±"
+    ]
+  },
+  {
+    "id": "mp",
+    "source": "a \\mp b",
+    "mathml": [
+      "∓"
+    ],
+    "omml": [
+      "∓"
+    ]
+  },
+  {
+    "id": "le",
+    "source": "a \\le b",
+    "mathml": [
+      "≤"
+    ],
+    "omml": [
+      "≤"
+    ]
+  },
+  {
+    "id": "leq",
+    "source": "a \\leq b",
+    "mathml": [
+      "≤"
+    ],
+    "omml": [
+      "≤"
+    ]
+  },
+  {
+    "id": "ge",
+    "source": "a \\ge b",
+    "mathml": [
+      "≥"
+    ],
+    "omml": [
+      "≥"
+    ]
+  },
+  {
+    "id": "geq",
+    "source": "a \\geq b",
+    "mathml": [
+      "≥"
+    ],
+    "omml": [
+      "≥"
+    ]
+  },
+  {
+    "id": "neq",
+    "source": "a \\neq b",
+    "mathml": [
+      "≠"
+    ],
+    "omml": [
+      "≠"
+    ]
+  },
+  {
+    "id": "approx",
+    "source": "a \\approx b",
+    "mathml": [
+      "≈"
+    ],
+    "omml": [
+      "≈"
+    ]
+  },
+  {
+    "id": "sim",
+    "source": "a \\sim b",
+    "mathml": [
+      "∼"
+    ],
+    "omml": [
+      "∼"
+    ]
+  },
+  {
+    "id": "equiv",
+    "source": "a \\equiv b",
+    "mathml": [
+      "≡"
+    ],
+    "omml": [
+      "≡"
+    ]
+  },
+  {
+    "id": "in",
+    "source": "a \\in b",
+    "mathml": [
+      "∈"
+    ],
+    "omml": [
+      "∈"
+    ]
+  },
+  {
+    "id": "notin",
+    "source": "a \\notin b",
+    "mathml": [
+      "∉"
+    ],
+    "omml": [
+      "∉"
+    ]
+  },
+  {
+    "id": "subset",
+    "source": "a \\subset b",
+    "mathml": [
+      "⊂"
+    ],
+    "omml": [
+      "⊂"
+    ]
+  },
+  {
+    "id": "subseteq",
+    "source": "a \\subseteq b",
+    "mathml": [
+      "⊆"
+    ],
+    "omml": [
+      "⊆"
+    ]
+  },
+  {
+    "id": "supset",
+    "source": "a \\supset b",
+    "mathml": [
+      "⊃"
+    ],
+    "omml": [
+      "⊃"
+    ]
+  },
+  {
+    "id": "supseteq",
+    "source": "a \\supseteq b",
+    "mathml": [
+      "⊇"
+    ],
+    "omml": [
+      "⊇"
+    ]
+  },
+  {
+    "id": "cup",
+    "source": "a \\cup b",
+    "mathml": [
+      "∪"
+    ],
+    "omml": [
+      "∪"
+    ]
+  },
+  {
+    "id": "cap",
+    "source": "a \\cap b",
+    "mathml": [
+      "∩"
+    ],
+    "omml": [
+      "∩"
+    ]
+  },
+  {
+    "id": "to",
+    "source": "a \\to b",
+    "mathml": [
+      "→"
+    ],
+    "omml": [
+      "→"
+    ]
+  },
+  {
+    "id": "rightarrow",
+    "source": "a \\rightarrow b",
+    "mathml": [
+      "→"
+    ],
+    "omml": [
+      "→"
+    ]
+  },
+  {
+    "id": "leftarrow",
+    "source": "a \\leftarrow b",
+    "mathml": [
+      "←"
+    ],
+    "omml": [
+      "←"
+    ]
+  },
+  {
+    "id": "Rightarrow",
+    "source": "a \\Rightarrow b",
+    "mathml": [
+      "⇒"
+    ],
+    "omml": [
+      "⇒"
+    ]
+  },
+  {
+    "id": "Leftarrow",
+    "source": "a \\Leftarrow b",
+    "mathml": [
+      "⇐"
+    ],
+    "omml": [
+      "⇐"
+    ]
+  },
+  {
+    "id": "leftrightarrow",
+    "source": "a \\leftrightarrow b",
+    "mathml": [
+      "↔"
+    ],
+    "omml": [
+      "↔"
+    ]
+  },
+  {
+    "id": "infty",
+    "source": "a \\infty b",
+    "mathml": [
+      "∞"
+    ],
+    "omml": [
+      "∞"
+    ]
+  },
+  {
+    "id": "partial",
+    "source": "a \\partial b",
+    "mathml": [
+      "∂"
+    ],
+    "omml": [
+      "∂"
+    ]
+  },
+  {
+    "id": "nabla",
+    "source": "a \\nabla b",
+    "mathml": [
+      "∇"
+    ],
+    "omml": [
+      "∇"
+    ]
+  },
+  {
+    "id": "forall",
+    "source": "a \\forall b",
+    "mathml": [
+      "∀"
+    ],
+    "omml": [
+      "∀"
+    ]
+  },
+  {
+    "id": "exists",
+    "source": "a \\exists b",
+    "mathml": [
+      "∃"
+    ],
+    "omml": [
+      "∃"
+    ]
+  },
+  {
+    "id": "neg",
+    "source": "a \\neg b",
+    "mathml": [
+      "¬"
+    ],
+    "omml": [
+      "¬"
+    ]
+  },
+  {
+    "id": "land",
+    "source": "a \\land b",
+    "mathml": [
+      "∧"
+    ],
+    "omml": [
+      "∧"
+    ]
+  },
+  {
+    "id": "lor",
+    "source": "a \\lor b",
+    "mathml": [
+      "∨"
+    ],
+    "omml": [
+      "∨"
+    ]
+  },
+  {
+    "id": "sin",
+    "source": "\\sin x",
+    "mathml": [
+      "sin",
+      "x"
+    ],
+    "omml": [
+      "sin",
+      "x"
+    ]
+  },
+  {
+    "id": "cos",
+    "source": "\\cos x",
+    "mathml": [
+      "cos",
+      "x"
+    ],
+    "omml": [
+      "cos",
+      "x"
+    ]
+  },
+  {
+    "id": "tan",
+    "source": "\\tan x",
+    "mathml": [
+      "tan",
+      "x"
+    ],
+    "omml": [
+      "tan",
+      "x"
+    ]
+  },
+  {
+    "id": "log",
+    "source": "\\log x",
+    "mathml": [
+      "log",
+      "x"
+    ],
+    "omml": [
+      "log",
+      "x"
+    ]
+  },
+  {
+    "id": "ln",
+    "source": "\\ln x",
+    "mathml": [
+      "ln",
+      "x"
+    ],
+    "omml": [
+      "ln",
+      "x"
+    ]
+  },
+  {
+    "id": "exp",
+    "source": "\\exp x",
+    "mathml": [
+      "exp",
+      "x"
+    ],
+    "omml": [
+      "exp",
+      "x"
+    ]
+  },
+  {
+    "id": "min",
+    "source": "\\min x",
+    "mathml": [
+      "min",
+      "x"
+    ],
+    "omml": [
+      "min",
+      "x"
+    ]
+  },
+  {
+    "id": "max",
+    "source": "\\max x",
+    "mathml": [
+      "max",
+      "x"
+    ],
+    "omml": [
+      "max",
+      "x"
+    ]
+  },
+  {
+    "id": "fraction",
+    "source": "\\frac{a}{b}",
+    "mathml": [
+      "<mfrac>"
+    ],
+    "omml": [
+      "<m:f>"
+    ]
+  },
+  {
+    "id": "square-root",
+    "source": "\\sqrt{x}",
+    "mathml": [
+      "<msqrt>"
+    ],
+    "omml": [
+      "<m:rad>"
+    ]
+  },
+  {
+    "id": "indexed-root",
+    "source": "\\sqrt[3]{x}",
+    "mathml": [
+      "<mroot>"
+    ],
+    "omml": [
+      "<m:rad>"
+    ]
+  },
+  {
+    "id": "scripts",
+    "source": "x_i^2",
+    "mathml": [
+      "<msub>"
+    ],
+    "omml": [
+      "<m:sSubSup>"
+    ]
+  },
+  {
+    "id": "sum",
+    "source": "\\sum_{i=1}^{n}i",
+    "mathml": [
+      "<munderover>"
+    ],
+    "omml": [
+      "<m:nary>"
+    ]
+  },
+  {
+    "id": "product",
+    "source": "\\prod_{i=1}^{n}i",
+    "mathml": [
+      "<munderover>"
+    ],
+    "omml": [
+      "<m:nary>"
+    ]
+  },
+  {
+    "id": "integral",
+    "source": "\\int_0^1 x",
+    "mathml": [
+      "<msubsup>"
+    ],
+    "omml": [
+      "<m:nary>"
+    ]
+  },
+  {
+    "id": "double-integral",
+    "source": "\\iint x",
+    "mathml": [
+      "∬"
+    ],
+    "omml": [
+      "∬"
+    ]
+  },
+  {
+    "id": "triple-integral",
+    "source": "\\iiint x",
+    "mathml": [
+      "∭"
+    ],
+    "omml": [
+      "∭"
+    ]
+  },
+  {
+    "id": "limit",
+    "source": "\\lim_{x\\to0}x",
+    "mathml": [
+      "<munder>"
+    ],
+    "omml": [
+      "<m:sSub>"
+    ]
+  },
+  {
+    "id": "parentheses",
+    "source": "\\left(\\frac{a}{b}\\right)",
+    "mathml": [
+      "<mfrac>"
+    ],
+    "omml": [
+      "<m:d>"
+    ]
+  },
+  {
+    "id": "operator",
+    "source": "\\operatorname{rank} A",
+    "mathml": [
+      "rank"
+    ],
+    "omml": [
+      "rank"
+    ]
+  },
+  {
+    "id": "text",
+    "source": "\\text{value}",
+    "mathml": [
+      "value"
+    ],
+    "omml": [
+      "value"
+    ]
+  },
+  {
+    "id": "overline",
+    "source": "\\overline{x}",
+    "mathml": [
+      "<mover>"
+    ],
+    "omml": [
+      "<m:bar>"
+    ]
+  },
+  {
+    "id": "underline",
+    "source": "\\underline{x}",
+    "mathml": [
+      "<munder>"
+    ],
+    "omml": [
+      "<m:bar>"
+    ]
+  },
+  {
+    "id": "hat",
+    "source": "\\hat{x}",
+    "mathml": [
+      "<mover>"
+    ],
+    "omml": [
+      "<m:acc>"
+    ]
+  },
+  {
+    "id": "bar",
+    "source": "\\bar{x}",
+    "mathml": [
+      "<mover>"
+    ],
+    "omml": [
+      "<m:acc>"
+    ]
+  },
+  {
+    "id": "vector",
+    "source": "\\vec{x}",
+    "mathml": [
+      "<mover>"
+    ],
+    "omml": [
+      "<m:acc>"
+    ]
+  },
+  {
+    "id": "matrix",
+    "source": "\\begin{matrix}a & b \\\\ c & d\\end{matrix}",
+    "mathml": [
+      "<mtable",
+      "a",
+      "b",
+      "c",
+      "d"
+    ],
+    "omml": [
+      "<m:m>",
+      "a",
+      "b",
+      "c",
+      "d"
+    ]
+  },
+  {
+    "id": "pmatrix",
+    "source": "\\begin{pmatrix}a & b \\\\ c & d\\end{pmatrix}",
+    "mathml": [
+      "<mtable",
+      "a",
+      "b",
+      "c",
+      "d"
+    ],
+    "omml": [
+      "<m:m>",
+      "a",
+      "b",
+      "c",
+      "d"
+    ]
+  },
+  {
+    "id": "bmatrix",
+    "source": "\\begin{bmatrix}a & b \\\\ c & d\\end{bmatrix}",
+    "mathml": [
+      "<mtable",
+      "a",
+      "b",
+      "c",
+      "d"
+    ],
+    "omml": [
+      "<m:m>",
+      "a",
+      "b",
+      "c",
+      "d"
+    ]
+  },
+  {
+    "id": "vmatrix",
+    "source": "\\begin{vmatrix}a & b \\\\ c & d\\end{vmatrix}",
+    "mathml": [
+      "<mtable",
+      "a",
+      "b",
+      "c",
+      "d"
+    ],
+    "omml": [
+      "<m:m>",
+      "a",
+      "b",
+      "c",
+      "d"
+    ]
+  },
+  {
+    "id": "align",
+    "source": "\\begin{align}a & b \\\\ c & d\\end{align}",
+    "mathml": [
+      "<mtable",
+      "a",
+      "b",
+      "c",
+      "d"
+    ],
+    "omml": [
+      "<m:m>",
+      "a",
+      "b",
+      "c",
+      "d"
+    ]
+  },
+  {
+    "id": "cases",
+    "source": "\\begin{cases}a & b \\\\ c & d\\end{cases}",
+    "mathml": [
+      "<mtable",
+      "a",
+      "b",
+      "c",
+      "d"
+    ],
+    "omml": [
+      "<m:m>",
+      "a",
+      "b",
+      "c",
+      "d"
+    ]
+  },
+  {
+    "id": "mathrm",
+    "source": "\\mathrm{x}",
+    "mathml": [
+      "mathvariant=\"normal\""
+    ],
+    "omml": [
+      "<m:nor/>"
+    ]
+  },
+  {
+    "id": "mathbf",
+    "source": "\\mathbf{x}",
+    "mathml": [
+      "𝐱"
+    ],
+    "omml": [
+      "m:val=\"b\""
+    ]
+  },
+  {
+    "id": "mathit",
+    "source": "\\mathit{x}",
+    "mathml": [
+      "<mi>x</mi>"
+    ],
+    "omml": [
+      "x"
+    ]
+  },
+  {
+    "id": "mathbb",
+    "source": "\\mathbb{x}",
+    "mathml": [
+      "𝕩"
+    ],
+    "omml": [
+      "𝕩"
+    ]
+  },
+  {
+    "id": "mathcal",
+    "source": "\\mathcal{A}",
+    "mathml": [
+      "𝒜"
+    ],
+    "omml": [
+      "𝒜"
+    ]
+  },
+  {
+    "id": "mathfrak",
+    "source": "\\mathfrak{x}",
+    "mathml": [
+      "𝔵"
+    ],
+    "omml": [
+      "𝔵"
+    ]
+  },
+  {
+    "id": "escape-37",
+    "source": "\\%",
+    "mathml": [
+      "%"
+    ],
+    "omml": [
+      "%"
+    ]
+  },
+  {
+    "id": "escape-38",
+    "source": "\\&",
+    "mathml": [
+      ">&</mi>"
+    ],
+    "omml": [
+      "&amp;"
+    ]
+  },
+  {
+    "id": "escape-95",
+    "source": "\\_",
+    "mathml": [
+      "_"
+    ],
+    "omml": [
+      "_"
+    ]
+  },
+  {
+    "id": "escape-36",
+    "source": "\\$",
+    "mathml": [
+      "$"
+    ],
+    "omml": [
+      "$"
+    ]
+  },
+  {
+    "id": "escape-123",
+    "source": "\\{",
+    "mathml": [
+      "{"
+    ],
+    "omml": [
+      "{"
+    ]
+  },
+  {
+    "id": "escape-125",
+    "source": "\\}",
+    "mathml": [
+      "}"
+    ],
+    "omml": [
+      "}"
+    ]
+  },
+  {
+    "id": "space-113",
+    "source": "a\\quad b",
+    "mathml": [
+      "<mspace",
+      "a",
+      "b"
+    ],
+    "omml": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "id": "space-113-wide",
+    "source": "a\\qquad b",
+    "mathml": [
+      "<mspace",
+      "a",
+      "b"
+    ],
+    "omml": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "id": "space-44",
+    "source": "a\\, b",
+    "mathml": [
+      "<mspace",
+      "a",
+      "b"
+    ],
+    "omml": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "id": "space-59",
+    "source": "a\\; b",
+    "mathml": [
+      "<mspace",
+      "a",
+      "b"
+    ],
+    "omml": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "id": "space-33",
+    "source": "a\\! b",
+    "mathml": [
+      "<mspace",
+      "a",
+      "b"
+    ],
+    "omml": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "id": "space-32",
+    "source": "a\\  b",
+    "mathml": [
+      "<mspace",
+      "a",
+      "b"
+    ],
+    "omml": [
+      "a",
+      "b"
+    ]
+  }
+]

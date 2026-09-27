@@ -21,7 +21,7 @@ describe('typed Markdown navigation dispatch', () => {
       actions
     );
 
-    expect(actions.openDocument).toHaveBeenCalledWith('C:\\docs\\other.md', 'part');
+    expect(actions.openDocument).toHaveBeenCalledWith({ kind: 'desktopFile', path: 'C:\\docs\\other.md' }, 'part');
     expect(actions.openExternal).not.toHaveBeenCalled();
     expect(actions.confirmExternal).not.toHaveBeenCalled();
   });
@@ -45,6 +45,14 @@ describe('typed Markdown navigation dispatch', () => {
 
     finish(false);
     await expect(result).resolves.toBe(false);
+  });
+
+  test('opens an Android document through its typed resource', async () => {
+    const actions = handlers();
+    const resource = { kind: 'androidDocument' as const, uri: 'content://provider/tree/root/document/chapter' };
+    await executeMarkdownTarget({ kind: 'localDocument', path: null, resource, fragment: 'section' }, false, actions);
+    expect(actions.openDocument).toHaveBeenCalledWith(resource, 'section');
+    expect(actions.openExternal).not.toHaveBeenCalled();
   });
 
   test('uses confirmation only for external links', async () => {

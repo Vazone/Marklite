@@ -1,14 +1,14 @@
 import { spawn } from 'node:child_process';
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { get as httpGet } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 
 const root = resolve(import.meta.dirname, '..');
 const workspace = await mkdtemp(join(tmpdir(), 'marklite-diagram-preview-'));
-const evidencePath = join(root, 'local', 'verification', 'diagram-preview-smoke.json');
+const evidencePath = join(root, 'local', 'verification', 'diagrams', 'diagram-preview-smoke-current.json');
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const readJson = (url) => new Promise((resolve, reject) => {
@@ -104,6 +104,10 @@ try {
     bundle: true,
     format: 'esm',
     platform: 'browser',
+    plugins: [{ name: 'raw-module', setup(builder) {
+      builder.onResolve({ filter: /\?raw$/ }, args => ({ path: resolve(args.resolveDir, args.path.slice(0, -4)), namespace: 'raw-module' }));
+      builder.onLoad({ filter: /.*/, namespace: 'raw-module' }, async args => ({ contents: await readFile(args.path, 'utf8'), loader: 'text' }));
+    } }],
     outfile: bundlePath
   });
   const runtime = await readFile(join(root, 'node_modules', 'mermaid', 'dist', 'mermaid.min.js'), 'utf8');
@@ -127,7 +131,7 @@ try {
   const results = [];
   for (const [index, theme, fontFamily, fontSize] of [[0, 'light', 'Arial, system-ui, sans-serif', 16], [1, 'dark', 'Segoe UI, system-ui, sans-serif', 18]]) {
     const execution = port.start({ ...source, diagramId: 'diagram-' + index + '-aaaaaaaaaaaa' }, {
-      rendererId: 'mermaid-offline-11.17.2', configVersion: 2, theme,
+      rendererId: 'mermaid-offline-11.17.2', configVersion: 3, theme,
       fontKey: fontFamily + '\\0' + fontSize + '\\0' + 1.6,
       fontFamily, fontSize, lineHeight: 1.6
     });
@@ -141,7 +145,7 @@ try {
   }));
   for (let index = 0; index < 100; index += 1) {
     const execution = lifecyclePort.start({ ...source, diagramId: 'diagram-' + index + '-aaaaaaaaaaaa' }, {
-      rendererId: 'mermaid-offline-11.17.2', configVersion: 2, theme: 'light',
+      rendererId: 'mermaid-offline-11.17.2', configVersion: 3, theme: 'light',
       fontKey: 'Arial\\0' + 16 + '\\0' + 1.6,
       fontFamily: 'Arial', fontSize: 16, lineHeight: 1.6
     });
@@ -160,7 +164,8 @@ try {
   if (!result.ok || result.results.length !== 2 || result.lifecycleCycles !== 100 || result.remainingFrames !== 0) {
     throw new Error(JSON.stringify(result));
   }
-  const evidence = { schemaVersion: 1, browser: 'Microsoft Edge headless', ...result };
+  const evidence = { schemaVersion: 1, scope: 'current Mermaid renderer verification', browser: 'Microsoft Edge headless', ...result };
+  await mkdir(dirname(evidencePath), { recursive: true });
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
   console.log(JSON.stringify(evidence, null, 2));
 } finally {

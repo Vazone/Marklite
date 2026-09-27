@@ -11,6 +11,7 @@ use crate::{
     models::{
         app_error::AppError,
         document::{DocumentDto, FileVersionDto},
+        resource::ResourceRef,
     },
     utils::{
         atomic_write::{atomic_write_checked, CheckedWriteError},
@@ -30,11 +31,14 @@ static READ_HOOK: std::sync::OnceLock<std::sync::Mutex<Option<ReadHook>>> =
     std::sync::OnceLock::new();
 
 pub fn read_markdown_file(path: &str) -> Result<DocumentDto, AppError> {
-    let path_buf = PathBuf::from(path);
+    ensure_allowed_file(Path::new(path))?;
+    read_resource(&ResourceRef::DesktopFile { path: path.into() })
+}
+
+pub fn read_resource(resource: &ResourceRef) -> Result<DocumentDto, AppError> {
+    let path_buf = crate::platform::desktop::resources::path(resource)?.to_path_buf();
+    let path = path_to_utf8(&path_buf)?;
     ensure_allowed_file(&path_buf)?;
-    if !path_buf.is_absolute() {
-        return Err(AppError::invalid_file_path(path));
-    }
     if !path_buf.exists() {
         return Err(AppError::file_not_found(path));
     }
@@ -70,6 +74,9 @@ pub fn read_markdown_file(path: &str) -> Result<DocumentDto, AppError> {
     let file_size = content.len() as u64;
 
     Ok(DocumentDto {
+        resource: Some(ResourceRef::DesktopFile {
+            path: path_to_utf8(&canonical)?.to_string(),
+        }),
         path: Some(path_to_utf8(&canonical)?.to_string()),
         file_identity: Some(identity),
         content_version: Some(content_version),
@@ -160,6 +167,9 @@ pub fn save_markdown_file(
         file_identity(&saved_file).map_err(|err| AppError::file_write_failed(path, err))?;
 
     Ok(DocumentDto {
+        resource: Some(ResourceRef::DesktopFile {
+            path: path_to_utf8(&canonical)?.to_string(),
+        }),
         path: Some(path_to_utf8(&canonical)?.to_string()),
         file_identity: Some(identity),
         content_version: Some(content_version(content.as_bytes())),

@@ -32,6 +32,7 @@ pub struct AppSettings {
     pub markdown_toolbar_enabled: bool,
     pub allow_local_images: bool,
     pub confirm_external_links: bool,
+    pub check_updates_automatically: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

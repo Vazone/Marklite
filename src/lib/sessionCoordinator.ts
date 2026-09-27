@@ -1,8 +1,8 @@
-import type { SessionStateDto } from './tauriApi';
+import type { ResourceSessionDto, SessionStateDto } from './tauriApi';
 
 export type SessionPersistIntent = {
   enabled: boolean;
-  session: SessionStateDto;
+  session: SessionStateDto | ResourceSessionDto;
 };
 
 export type SessionCoordinatorOptions = {
@@ -63,7 +63,9 @@ export function createSessionCoordinator(options: SessionCoordinatorOptions) {
       if (!writable || disposed) return;
       pending = {
         enabled: intent.enabled,
-        session: { ...intent.session, paths: [...intent.session.paths] }
+        session: intent.session.version === 1
+          ? { ...intent.session, paths: [...intent.session.paths] }
+          : { ...intent.session, resources: [...intent.session.resources] }
       };
       scheduleDrain();
     },

@@ -2,6 +2,7 @@
   import type { AppSettings, ThemeMode } from '../../lib/tauriApi';
   import { listedShortcuts } from '../../lib/shortcuts';
   import { supportedLanguages, translator, type AppLanguage } from '../../lib/i18n';
+  import DiagramRuntimeControl from './DiagramRuntimeControl.svelte';
   import ModalShell from './ModalShell.svelte';
 
   export let open = false;
@@ -10,6 +11,9 @@
   export let onSave: (settings: AppSettings) => void | Promise<AppSettings | void>;
   export let onReset: () => void | Promise<AppSettings | void>;
   export let onClose: () => void;
+  export let desktopUpdates = false;
+  export let desktopDiagramPack = false;
+  export let onDiagramRuntimeChanged: () => void | Promise<void> = () => undefined;
 
   let draft: AppSettings = { ...settings };
   let tab: 'appearance' | 'editor' | 'preview' | 'files' | 'shortcuts' = 'appearance';
@@ -171,7 +175,16 @@
               <span>{$translator('settings.previewFontSize')}</span>
               <input type="number" min="12" max="28" bind:value={draft.previewFontSize} on:input={(event) => update('previewFontSize', Number(event.currentTarget.value))} />
             </label>
+            {#if desktopDiagramPack}
+              <DiagramRuntimeControl onChanged={onDiagramRuntimeChanged} />
+            {/if}
           {:else if tab === 'files'}
+            {#if desktopUpdates}
+              <label class="switch-row">
+                <span>{$translator('settings.checkUpdatesAutomatically')}</span>
+                <input type="checkbox" bind:checked={draft.checkUpdatesAutomatically} on:change={(event) => update('checkUpdatesAutomatically', event.currentTarget.checked)} />
+              </label>
+            {/if}
             <label class="switch-row">
               <span>{$translator('settings.showSidebar')}</span>
               <input type="checkbox" bind:checked={draft.showSidebar} on:change={(event) => update('showSidebar', event.currentTarget.checked)} />

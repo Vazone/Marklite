@@ -1,4 +1,9 @@
 import type { FrontendStartupEvent } from '../startupLifecycle';
+import { createWorkspaceClient, type WorkspaceClient } from './workspaceClient';
+import { desktopFile, parseResourceRef, type ResourceRef } from './resources';
+import { parseRecoveryInventory, parseRecoveryReceipt, parseRecoverySnapshot, type RecoveryInventory, type RecoveryReceipt, type RecoverySnapshot } from './recovery';
+import type { ExportCancelStatus, ExportFormat } from './contracts';
+import { parseCapabilities, type PlatformCapabilities } from './capabilities';
 import {
   decodeLocalImageResponse,
   parseAppSettings,
@@ -16,6 +21,7 @@ import {
   parseDiagramRuntimeAsset,
   parseDiagramRuntimeStatus,
   parseSessionState,
+  parseResourceSession,
   parseStartupDiagnosticsExport,
   parseStartupReady,
   parseString,
@@ -39,12 +45,20 @@ import type {
   DiagramRuntimeAsset,
   DiagramRuntimeStatus,
   SessionStateDto,
+  ResourceSessionDto,
   StartupDiagnosticsExportDto,
   StartupReadyDto
 } from './contracts';
 import type { CommandTransport } from './runtime';
 
 export type TauriClient = {
+  workspace: WorkspaceClient;
+  listRecovery(): Promise<RecoveryInventory>;
+  readRecovery(id: string): Promise<RecoverySnapshot>;
+  saveRecovery(snapshot: RecoverySnapshot): Promise<RecoveryReceipt>;
+  resolveRecovery(receipt: RecoveryReceipt): Promise<void>;
+  cancelExport(jobId: string, format: ExportFormat): Promise<ExportCancelStatus>;
+  getPlatformCapabilities(): Promise<PlatformCapabilities>;
   openMarkdownFile(path: string): Promise<DocumentOperationDto>;
   saveMarkdownFile(
     path: string,
@@ -57,7 +71,7 @@ export type TauriClient = {
   resolveFileVersion(path: string, allowMissing: boolean): Promise<FileVersionDto | null>;
   resolvePngExportDirectory(sourcePath: string | null, title: string, parentPath: string | null): Promise<string>;
   cancelPngExport(jobId: string): Promise<boolean>;
-  exportDocument(request: ExportRequest): Promise<ExportResult>;
+  exportDocument(request: ExportRequest, sourceResource?: ResourceRef | null): Promise<ExportResult>;
   suggestExportPath(defaultPath: string): Promise<ExportPathSuggestion>;
   rememberExportDirectory(targetPath: string): Promise<void>;
   getStartupFileArg(): Promise<string | null>;
@@ -84,6 +98,9 @@ export type TauriClient = {
   getSession(): Promise<SessionStateDto>;
   updateSession(session: SessionStateDto): Promise<SessionStateDto>;
   clearSession(): Promise<void>;
+  getResourceSession(): Promise<ResourceSessionDto>;
+  updateResourceSession(session: ResourceSessionDto): Promise<ResourceSessionDto>;
+  clearResourceSession(): Promise<void>;
   showInFileManager(path: string): Promise<void>;
   recordFrontendStartupEvent(event: FrontendStartupEvent): Promise<void>;
   markFrontendReady(elapsedMs: number): Promise<StartupReadyDto>;
@@ -99,8 +116,20 @@ export function createTauriClient(
   const invokeUnit = async (command: string, args?: Record<string, unknown>) => {
     await invoke(command, args);
   };
+  const getPlatformCapabilities = async () => parseCapabilities(await invoke('get_platform_capabilities'));
 
   return {
+    workspace: createWorkspaceClient(transport, getPlatformCapabilities),
+    async listRecovery() { return parseRecoveryInventory(await invoke('list_recovery')); },
+    async readRecovery(id) { return parseRecoverySnapshot(await invoke('read_recovery', { id })); },
+    async saveRecovery(snapshot) { return parseRecoveryReceipt(await invoke('save_recovery', { snapshot })); },
+    async resolveRecovery(receipt) { return invokeUnit('resolve_recovery', { receipt }); },
+    async cancelExport(jobId, format) {
+      const status = await invoke('cancel_export', { jobId, format });
+      if (status === 'requested' || status === 'notRunning' || status === 'tooLate' || status === 'unsupported') return status;
+      throw { code: 'INVALID_RESPONSE', message: 'Invalid cancellation acknowledgement.' };
+    },
+    getPlatformCapabilities,
     async openMarkdownFile(path) {
       return parseDocumentOperationDto(await invoke('open_markdown_file', { path }));
     },
@@ -136,8 +165,16 @@ export function createTauriClient(
     async cancelPngExport(jobId) {
       return parseBoolean(await invoke('cancel_png_export', { jobId }), 'cancel_png_export');
     },
-    async exportDocument(request) {
-      return parseExportResult(await invoke('export_document', { request }));
+    async exportDocument(request, sourceResource) {
+      return parseExportResult(await invoke('export_document', {
+        request,
+        sourceResource: sourceResource === undefined
+          ? request.snapshot.sourcePath === null ? null : desktopFile(request.snapshot.sourcePath)
+          : sourceResource === null ? null : parseResourceRef(sourceResource),
+        targetResource: request.targetPath.startsWith('content://')
+          ? parseResourceRef({ kind: request.format === 'png' ? 'androidTree' : 'androidDocument', uri: request.targetPath })
+          : desktopFile(request.targetPath)
+      }));
     },
     async suggestExportPath(defaultPath) {
       return parseExportPathSuggestion(await invoke('suggest_export_path', { defaultPath }));
@@ -223,6 +260,15 @@ export function createTauriClient(
     },
     clearSession() {
       return invokeUnit('clear_session');
+    },
+    async getResourceSession() {
+      return parseResourceSession(await invoke('get_resource_session'));
+    },
+    async updateResourceSession(session) {
+      return parseResourceSession(await invoke('update_resource_session', { session }));
+    },
+    clearResourceSession() {
+      return invokeUnit('clear_resource_session');
     },
     showInFileManager(path) {
       return invokeUnit('show_in_file_manager', { path });

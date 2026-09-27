@@ -1,5 +1,6 @@
 import defaultSettingsJson from '../../shared/default-settings.json';
 import type { AppLanguage } from '../i18n';
+import type { ResourceRef } from './resources';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -29,9 +30,11 @@ export type AppSettings = {
   markdownToolbarEnabled: boolean;
   allowLocalImages: boolean;
   confirmExternalLinks: boolean;
+  checkUpdatesAutomatically: boolean;
 };
 
 export type DocumentDto = {
+  resource?: ResourceRef | null;
   path: string | null;
   fileIdentity: string | null;
   contentVersion: string | null;
@@ -81,7 +84,15 @@ export type SanitizedMarkdownHtml = string & {
 
 export const EMPTY_SANITIZED_MARKDOWN_HTML = '' as SanitizedMarkdownHtml;
 
+export type MarkdownDiagnostic = {
+  code: string;
+  message: string;
+  line: number;
+  column: number;
+};
+
 export type RenderedMarkdownDto = {
+  markdownDiagnostics?: MarkdownDiagnostic[];
   html: SanitizedMarkdownHtml;
   outline: OutlineItem[];
   stats: DocumentStats;
@@ -97,6 +108,7 @@ export type VirtualPreviewIndex = {
 };
 
 export type VirtualPreviewSegment = {
+  sourceContinuation?: boolean;
   startUtf16: number;
   endUtf16: number;
   startLine: number;
@@ -173,6 +185,7 @@ export type SourceBlock = {
 };
 
 export type MarkdownAnalysisDto = {
+  markdownDiagnostics?: MarkdownDiagnostic[];
   outline: OutlineItem[];
   stats: DocumentStats;
 };
@@ -183,9 +196,15 @@ export type SessionStateDto = {
   activePath: string | null;
 };
 
+export type ResourceSessionDto = {
+  version: 2;
+  resources: ResourceRef[];
+  activeResource: ResourceRef | null;
+};
+
 export type MarkdownTargetDto =
   | { kind: 'anchor'; fragment: string }
-  | { kind: 'localDocument'; path: string; fragment: string | null }
+  | { kind: 'localDocument'; path: string | null; resource?: ResourceRef; fragment: string | null }
   | { kind: 'external'; url: string }
   | { kind: 'email'; address: string };
 
@@ -210,6 +229,7 @@ export type LocalImageBatchDto = {
 };
 
 export type ExportFormat = 'html' | 'pdf' | 'docx' | 'svg' | 'png';
+export type ExportCancelStatus = 'requested' | 'notRunning' | 'tooLate' | 'unsupported';
 export type ExportPaperSize = 'a4' | 'letter';
 export type ExportOrientation = 'portrait' | 'landscape';
 export type ExportMarginPreset = 'narrow' | 'normal' | 'wide';

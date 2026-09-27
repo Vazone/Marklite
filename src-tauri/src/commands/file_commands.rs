@@ -1,7 +1,9 @@
-use std::{
-    env,
-    path::{Path, PathBuf},
-};
+#[cfg(desktop)]
+use std::env;
+use std::path::PathBuf;
+
+#[cfg(any(desktop, test))]
+use std::path::Path;
 
 use crate::{
     commands::background::run_background,
@@ -10,8 +12,11 @@ use crate::{
         document::{DocumentDto, DocumentOperationDto, FileVersionDto},
     },
     services::{file_service, recent_files_service, settings_service},
-    utils::path_utils::{canonicalize_path, path_to_utf8},
+    utils::path_utils::canonicalize_path,
 };
+
+#[cfg(any(desktop, test))]
+use crate::utils::path_utils::path_to_utf8;
 
 #[tauri::command]
 pub async fn open_markdown_file(path: String) -> Result<DocumentOperationDto, AppError> {
@@ -107,9 +112,18 @@ fn complete_document_operation(
 
 #[tauri::command]
 pub async fn get_startup_file_arg() -> Result<Option<String>, AppError> {
-    run_background("读取启动参数", get_startup_file_arg_inner).await
+    #[cfg(desktop)]
+    {
+        run_background("读取启动参数", get_startup_file_arg_inner).await
+    }
+    #[cfg(mobile)]
+    {
+        // Android uses Activity intents; document intent handling is not wired yet.
+        Ok(None)
+    }
 }
 
+#[cfg(desktop)]
 fn get_startup_file_arg_inner() -> Result<Option<String>, AppError> {
     let cwd = env::current_dir().map_err(|error| AppError::file_read_failed(".", error))?;
     for arg in env::args().skip(1) {
@@ -148,6 +162,7 @@ fn show_in_file_manager_inner(path: String) -> Result<(), AppError> {
     Ok(())
 }
 
+#[cfg(any(desktop, test))]
 fn canonical_startup_file(path: &Path, cwd: &Path) -> Result<Option<PathBuf>, AppError> {
     let candidate = if path.is_absolute() {
         path.to_path_buf()
@@ -206,6 +221,9 @@ mod tests {
     #[test]
     fn preserves_the_document_when_an_auxiliary_update_fails() {
         let document = DocumentDto {
+            resource: Some(crate::models::resource::ResourceRef::DesktopFile {
+                path: "C:\\note.md".into(),
+            }),
             path: Some("C:\\note.md".to_string()),
             file_identity: Some("test-identity".to_string()),
             content_version: Some("sha256:test".to_string()),

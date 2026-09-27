@@ -1,9 +1,10 @@
+use std::collections::{HashMap, HashSet};
+#[cfg(desktop)]
 use std::{
-    collections::{HashMap, HashSet},
     path::Path,
     sync::{
-        atomic::{AtomicU64, Ordering},
-        mpsc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc, Arc,
     },
     time::{Duration, Instant},
 };
@@ -18,12 +19,14 @@ use crate::{
         diagram::{DiagramSource, RenderedDiagram},
         export::ExportWarning,
     },
-    services::{
-        diagram_runtime_service, diagram_service, export_semantic::SemanticDocument,
-        pdf_artifact::PdfWorkspace,
-    },
+    services::{diagram_service, export_semantic::SemanticDocument},
+};
+#[cfg(desktop)]
+use crate::{
+    services::{diagram_runtime_service, pdf_artifact::PdfWorkspace},
     utils::path_utils::app_data_dir,
 };
+#[cfg(desktop)]
 use tauri::WebviewUrl;
 
 const NORMALIZATION_JS: &str = include_str!("../../../src/shared/mermaidSvgNormalization.mjs");
@@ -32,7 +35,9 @@ const MAX_BATCH_SVG_BYTES: usize = 32 * 1024 * 1024;
 const MAX_RASTER_BYTES: usize = 8 * 1024 * 1024;
 const MAX_BATCH_RASTER_BYTES: usize = 32 * 1024 * 1024;
 const MAX_BROWSER_RESULT_BYTES: usize = 160 * 1024 * 1024;
+#[cfg(desktop)]
 const RENDER_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(desktop)]
 static RENDER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy)]
@@ -52,31 +57,7 @@ impl DiagramExportMode {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct PreparedDiagrams {
-    pub artifacts: HashMap<String, RenderedDiagram>,
-    pub print_artifacts: HashMap<String, RenderedDiagram>,
-    pub rasters: HashMap<String, RasterDiagram>,
-    pub warnings: Vec<ExportWarning>,
-}
-
-#[derive(Debug)]
-pub(crate) struct RasterDiagram {
-    pub png: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
-}
-
-impl PreparedDiagrams {
-    pub fn empty() -> Self {
-        Self {
-            artifacts: HashMap::new(),
-            print_artifacts: HashMap::new(),
-            rasters: HashMap::new(),
-            warnings: Vec::new(),
-        }
-    }
-}
+pub(crate) use crate::models::diagram_assets::{PreparedDiagrams, RasterDiagram};
 
 pub(crate) fn inspect(document: &SemanticDocument) -> (Vec<DiagramSource>, Vec<ExportWarning>) {
     let sources = document.diagram_sources();
@@ -175,6 +156,8 @@ window.__markliteDiagramExport = {{ status: 'pending' }};
     themeVariables: {{ fontFamily: 'Arial, system-ui, sans-serif', fontSize: '16px' }},
     logLevel: 'fatal', flowchart: {{ htmlLabels: true, defaultRenderer: 'dagre-wrapper' }}
   }});
+  // Hidden WebKitGTK windows can report a zero viewport; layout needs a real width.
+  document.body.style.width = '1024px';
   document.body.style.fontFamily = 'Arial, system-ui, sans-serif';
   document.body.style.fontSize = '16px';
   document.body.style.lineHeight = '1.6';
@@ -186,8 +169,7 @@ window.__markliteDiagramExport = {{ status: 'pending' }};
       globalThis.mermaid.render('marklite-export-' + source.ordinal, source.sourceUtf8),
       new Promise((_, reject) => {{ timer = setTimeout(() => reject(new Error('DIAGRAM_TIMEOUT')), 5000); }})
     ]).finally(() => clearTimeout(timer));
-    const parsed = new DOMParser().parseFromString(rendered.svg, 'image/svg+xml');
-    const root = normalizeMermaidSvgDocument(parsed.documentElement);
+    const root = normalizeMermaidSvgDocument(parseMermaidSvgDocument(rendered.svg));
     const svgUtf8 = new XMLSerializer().serializeToString(root);
     const viewBox = (root.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
     if (viewBox.length !== 4 || viewBox.some((value) => !Number.isFinite(value))) throw new Error('Mermaid SVG has no finite viewBox');
@@ -268,8 +250,14 @@ pub(crate) fn parse_browser_result(value: &str) -> Result<BrowserResult, AppErro
     }
     // WebView callbacks serialize the evaluation result as JSON; the evaluated
     // expression itself is a JSON string so one layer of quoting is expected.
-    let json: String = serde_json::from_str(value).map_err(|_| browser_result_error())?;
-    serde_json::from_str(&json).map_err(|_| browser_result_error())
+    let json: String = serde_json::from_str(value).map_err(|_| {
+        AppError::new(
+            "DIAGRAM_RUNTIME_CRASHED",
+            format!("图表回调不是 JSON 字符串（{} 字节）", value.len()),
+        )
+    })?;
+    serde_json::from_str(&json)
+        .map_err(|_| AppError::new("DIAGRAM_RUNTIME_CRASHED", "图表回调缺少完整的类型状态"))
 }
 
 pub(crate) fn validate_batch(
@@ -436,6 +424,7 @@ pub(crate) fn validate_batch(
     })
 }
 
+#[cfg(desktop)]
 pub(crate) async fn prepare(
     app: &tauri::AppHandle,
     document: &SemanticDocument,
@@ -501,12 +490,22 @@ pub(crate) async fn prepare(
     }
     let url = url::Url::from_file_path(workspace.html_path())
         .map_err(|_| AppError::new("DIAGRAM_RUNTIME_CRASHED", "无法建立图表渲染页面 URL"))?;
+    // WebKitGTK queues pre-load scripts without retaining eval callbacks.
+    // Wait for the actual document before querying its typed render state.
+    let loaded = Arc::new(AtomicBool::new(false));
+    let page_loaded = loaded.clone();
     let sequence = RENDER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let mut builder = tauri::WebviewWindowBuilder::new(
         app,
         format!("diagram-export-{}-{sequence}", std::process::id()),
         WebviewUrl::External(url),
     )
+    .on_page_load(move |_, payload| {
+        page_loaded.store(
+            matches!(payload.event(), tauri::webview::PageLoadEvent::Finished),
+            Ordering::Release,
+        );
+    })
     .title("MarkLite Diagram Export")
     .visible(false)
     .focused(false)
@@ -544,6 +543,14 @@ pub(crate) async fn prepare(
                     "DIAGRAM_TIMEOUT",
                     "Mermaid 导出渲染超过 30 秒",
                 ));
+            }
+            if !loaded.load(Ordering::Acquire) {
+                tauri::async_runtime::spawn_blocking(|| {
+                    std::thread::sleep(Duration::from_millis(50))
+                })
+                .await
+                .map_err(|_| browser_result_error())?;
+                continue;
             }
             let (sender, receiver) = mpsc::channel();
             window
@@ -627,7 +634,7 @@ fn cache_key(source_sha256: &str) -> String {
     );
     let parts = [
         diagram_service::RENDERER_ID,
-        "2",
+        "3",
         "light",
         &font_key,
         source_sha256,
@@ -658,6 +665,7 @@ mod tests {
         assert!(warnings.is_empty());
         let page =
             render_page("globalThis.mermaid={};", &sources, DiagramExportMode::Html).unwrap();
+        assert!(page.contains("function parseMermaidSvgDocument"));
         assert!(page.contains("function normalizeMermaidSvgDocument"));
         assert!(page.contains("\\u003c/script"));
         assert!(page.contains("connect-src 'none'"));

@@ -21,7 +21,7 @@ for (const shell of ['direct', 'cmd', 'pwsh']) {
   const output = path.join(root, `${shell}.html`);
   for (const [name, args, code, expected] of [
     ['help', ['--help'], 0, 'USAGE:'],
-    ['version', ['--version'], 0, 'marklite-cli 0.1.6'],
+    ['version', ['--version'], 0, `marklite-cli ${JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version}`],
     ['error', ['--invalid'], 2, 'INVALID_ARGUMENT:'],
     ...['html', 'docx', 'pdf'].map(format => [
       `export-${format}`, ['export', input, '--format', format, '--output', output.replace(/\.html$/, `.${format}`), '--overwrite'], 0, `.${format}`,

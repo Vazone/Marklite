@@ -2,6 +2,20 @@ import { describe, expect, test, vi } from 'vitest';
 import { measurePreviewChunks, rescalePreviewChunks, wrapPreviewChunks } from './previewChunks';
 
 describe('preview chunks', () => {
+  test('stores unscaled heights while a pane is visually magnified', () => {
+    const template = document.createElement('template');
+    template.innerHTML = '<p>Zoomed article</p>';
+    const chunks = wrapPreviewChunks(template.content);
+    const host = document.createElement('section');
+    host.append(template.content);
+    vi.spyOn(chunks.leaves[0], 'getBoundingClientRect').mockReturnValue({ height: 220 } as DOMRect);
+    vi.spyOn(chunks.groups[0], 'getBoundingClientRect').mockReturnValue({ height: 220 } as DOMRect);
+    measurePreviewChunks(host, chunks, 2.2);
+    expect(chunks.baseHeights[0]).toBeCloseTo(100);
+    expect(Number.parseFloat(chunks.leaves[0].style.getPropertyValue('--base-height'))).toBeCloseTo(100);
+    expect(Number.parseFloat(chunks.groups[0].style.getPropertyValue('--base-group-height'))).toBeCloseTo(100);
+  });
+
   test('keeps every article block in order and scales the scroll extent from visible geometry', () => {
     const template = document.createElement('template');
     template.innerHTML = Array.from({ length: 9_300 }, (_, index) => `<p id="block-${index}">Block ${index}</p>`).join('');

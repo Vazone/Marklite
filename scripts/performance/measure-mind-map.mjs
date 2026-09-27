@@ -22,7 +22,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '.
 const outputIndex = process.argv.indexOf('--output');
 const outputPath = outputIndex >= 0
   ? resolve(process.argv[outputIndex + 1])
-  : resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'mind-map.json');
+  : resolve(repositoryRoot, 'local', 'verification', 'performance', 'mind-map.json');
 const sampleCount = 5;
 
 function percentile(values, percent) {

@@ -6,6 +6,7 @@ mod models {
     pub mod diagram { include!(concat!(env!("MARKLITE_TEST_ROOT"), "/src-tauri/src/models/diagram.rs")); }
     pub mod export { include!(concat!(env!("MARKLITE_TEST_ROOT"), "/src-tauri/src/models/export.rs")); }
     pub mod markdown { include!(concat!(env!("MARKLITE_TEST_ROOT"), "/src-tauri/src/models/markdown.rs")); }
+    pub mod markdown_event { include!(concat!(env!("MARKLITE_TEST_ROOT"), "/src-tauri/src/models/markdown_event.rs")); }
 }
 mod services {
     pub mod diagram_service { include!(concat!(env!("MARKLITE_TEST_ROOT"), "/src-tauri/src/services/diagram_service.rs")); }

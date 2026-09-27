@@ -5,6 +5,8 @@ use super::app_error::AppError;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DocumentDto {
+    #[serde(default)]
+    pub resource: Option<super::resource::ResourceRef>,
     pub path: Option<String>,
     pub file_identity: Option<String>,
     pub content_version: Option<String>,

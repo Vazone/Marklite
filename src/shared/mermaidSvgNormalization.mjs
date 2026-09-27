@@ -1,6 +1,23 @@
+/** @param {string} svgMarkup @returns {Element} */
+export function parseMermaidSvgDocument(svgMarkup) {
+  // Mermaid 11.17.2 serializes an HTML label's line break as <br> inside
+  // foreignObject. XML parsing needs the void tag closed before SVG policy runs.
+  const xml = svgMarkup.replaceAll('<br>', '<br/>');
+  const root = new DOMParser().parseFromString(xml, 'image/svg+xml').documentElement;
+  if (root.localName !== 'svg' || root.namespaceURI !== 'http://www.w3.org/2000/svg') {
+    throw new Error('Mermaid returned invalid SVG XML');
+  }
+  return root;
+}
+
 /** @param {Element} root @returns {Element} */
 export function normalizeMermaidSvgDocument(root) {
   const svgNamespace = 'http://www.w3.org/2000/svg';
+  // The fixed 11.17.2 info renderer declares a 400 x 100 canvas internally,
+  // but configureSvgSize omits both viewBox and height when useMaxWidth is true.
+  if (!root.hasAttribute('viewBox') && root.getAttribute('aria-roledescription') === 'info') {
+    root.setAttribute('viewBox', '0 0 400 100');
+  }
   for (const foreignObject of [...root.querySelectorAll('foreignObject')]) {
     if (foreignObject.querySelector('.katex, math')) continue;
     const parent = foreignObject.parentElement;
@@ -22,7 +39,11 @@ export function normalizeMermaidSvgDocument(root) {
     text.setAttribute('y', String(Number.isFinite(y + height / 2) ? y + height / 2 : 0));
     text.setAttribute('text-anchor', 'middle');
     text.setAttribute('dominant-baseline', 'middle');
-    const label = foreignObject.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+    const labelNode = /** @type {Element} */ (foreignObject.cloneNode(true));
+    for (const lineBreak of [...labelNode.querySelectorAll('br')]) {
+      lineBreak.replaceWith(root.ownerDocument.createTextNode('\n'));
+    }
+    const label = labelNode.textContent?.replace(/[^\S\n]+/g, ' ').replace(/ *\n */g, '\n').trim() ?? '';
     const fontSize = 16;
     const lineHeight = fontSize * 1.5;
     const context = document.createElement('canvas').getContext('2d');
@@ -30,6 +51,11 @@ export function normalizeMermaidSvgDocument(root) {
     const lines = [];
     let current = '';
     for (const character of label) {
+      if (character === '\n') {
+        lines.push(current.trim());
+        current = '';
+        continue;
+      }
       const candidate = current + character;
       const measured = context?.measureText(candidate).width ?? candidate.length * fontSize;
       if (current && width > 0 && measured > width + 8) {

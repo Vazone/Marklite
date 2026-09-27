@@ -295,7 +295,7 @@ fn rename_directory_new(from: &Path, to: &Path) -> io::Result<()> {
         .map_err(|_| io::Error::last_os_error())
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn rename_directory_new(from: &Path, to: &Path) -> io::Result<()> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
     let from = CString::new(from.as_os_str().as_bytes())?;
@@ -320,6 +320,14 @@ fn rename_directory_new(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
+#[cfg(mobile)]
+fn rename_directory_new(_from: &Path, _to: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Directory export is not available on mobile platforms",
+    ))
+}
+
 pub(crate) fn validate_dimensions(width: u32, height: u32) -> Result<(), AppError> {
     if width != IMAGE_WIDTH || !(1..=MAX_IMAGE_HEIGHT).contains(&height) {
         return Err(error(
@@ -332,7 +340,7 @@ pub(crate) fn validate_dimensions(width: u32, height: u32) -> Result<(), AppErro
     Ok(())
 }
 
-fn validate_png(bytes: &[u8], width: u32, height: u32) -> Result<(), AppError> {
+pub(crate) fn validate_png(bytes: &[u8], width: u32, height: u32) -> Result<(), AppError> {
     validate_dimensions(width, height)?;
     let invalid = || error("PNG_INVALID_OUTPUT", "平台未生成完整且尺寸一致的 PNG 图片");
     if bytes.len() > MAX_IMAGE_BYTES

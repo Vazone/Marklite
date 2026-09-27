@@ -5,10 +5,11 @@
 
   export let tab: StatusDocumentView | undefined;
   export let layoutMode: LayoutMode = 'split';
+  export let mobile = false;
 </script>
 
-<footer class="statusbar">
-  <span>
+<footer class="statusbar" class:mobile>
+  <span class="status-state">
     {tab?.loadState === 'loading'
       ? $translator('status.loading')
       : tab?.loadState === 'error'
@@ -19,8 +20,8 @@
             ? $translator('status.unsaved')
             : $translator('status.saved')}
   </span>
-  <span>{tab?.path ?? $translator('status.noPath')}</span>
-  {#if tab?.loadState === 'loaded'}
+  <span class="status-document" title={tab?.path ?? tab?.title ?? ''}>{mobile ? tab?.title ?? $translator('status.noPath') : tab?.path ?? $translator('status.noPath')}</span>
+  {#if !mobile && tab?.loadState === 'loaded'}
     <span>{$translator('status.words', { count: tab.stats.wordCount })}</span>
     <span>{$translator('status.characters', { count: tab.stats.characterCount })}</span>
     <span>{$translator('status.lines', { count: tab.stats.lineCount })}</span>

@@ -151,7 +151,7 @@ impl PdfAssembler {
                 if let Some(fragment) = String::from_utf8_lossy(uri)
                     .strip_prefix(super::export_html_writer::PDF_ANCHOR_URL)
                 {
-                    let name = percent_encoding::percent_decode_str(fragment).collect::<Vec<_>>();
+                    let name = fragment.as_bytes().to_vec();
                     self.links.push((*id, dictionary.clone(), name));
                 }
             }
@@ -254,7 +254,15 @@ impl PdfAssembler {
         trailer.objects.insert((1, 0), catalog.into());
         for (id, mut link, name) in self.links.drain(..) {
             link.remove(b"A");
-            if self.destinations.contains_key(&name) {
+            // Chromium can publish percent-encoded names in /Dests. Preserve
+            // that exact identity before trying printers that decode names.
+            let resolved = if self.destinations.contains_key(&name) {
+                Some(name)
+            } else {
+                let decoded = percent_encoding::percent_decode(&name).collect::<Vec<_>>();
+                self.destinations.contains_key(&decoded).then_some(decoded)
+            };
+            if let Some(name) = resolved {
                 link.set("Dest", Object::Name(name));
             }
             trailer.objects.insert(id, link.into());
@@ -336,11 +344,15 @@ mod tests {
             doc.objects.insert(pages, dictionary! {"Type"=>"Pages", "Kids"=>vec![Object::Reference(page)], "Count"=>1, "MediaBox"=>vec![0.into(),0.into(),200.into(),300.into()]}.into());
             let mut destinations = Dictionary::new();
             destinations.set(
-                format!("target{number}"),
+                if number == 0 {
+                    "target0".to_string()
+                } else {
+                    "%E6%9C%AB%E7%AB%A0".to_string()
+                },
                 vec![Object::Reference(page), Object::Name(b"Fit".to_vec())],
             );
             if number == 0 {
-                let cross = doc.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Link", "A"=>dictionary! {"S"=>"URI", "URI"=>Object::string_literal(format!("{}target1", super::super::export_html_writer::PDF_ANCHOR_URL))}});
+                let cross = doc.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Link", "A"=>dictionary! {"S"=>"URI", "URI"=>Object::string_literal(format!("{}%E6%9C%AB%E7%AB%A0", super::super::export_html_writer::PDF_ANCHOR_URL))}});
                 doc.get_object_mut(page)
                     .unwrap()
                     .as_dict_mut()
@@ -396,7 +408,7 @@ mod tests {
             if index == 0 {
                 assert_eq!(
                     annotation[1].get(b"Dest").unwrap().as_name().unwrap(),
-                    b"target1"
+                    b"%E6%9C%AB%E7%AB%A0"
                 );
                 assert!(annotation[1].get(b"A").is_err());
             }
@@ -408,7 +420,7 @@ mod tests {
             .unwrap()
             .as_dict()
             .unwrap()
-            .get(b"target1")
+            .get(b"%E6%9C%AB%E7%AB%A0")
             .unwrap()
             .as_array()
             .unwrap()[0]

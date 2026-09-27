@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    models::{app_error::AppError, recent::RecentFileDto},
+    models::{app_error::AppError, recent::RecentFileDto, resource::ResourceRef},
     services::file_service::{ensure_allowed_file, MAX_FILE_SIZE},
     utils::{
         atomic_write::atomic_write,
@@ -20,7 +20,7 @@ use crate::{
 };
 
 static RECENT_FILES_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-const RECENT_FILES_VERSION: u32 = 1;
+const RECENT_FILES_VERSION: u32 = 2;
 const MAX_RECENT_FILES_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_RECENT_FILES_ENTRIES: usize = 100;
 
@@ -31,9 +31,25 @@ struct RecentFilesDocument {
     files: Vec<RecentFileDto>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResourceRecentFile {
+    resource: ResourceRef,
+    title: String,
+    last_opened_at: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResourceRecentDocument {
+    version: u32,
+    files: Vec<ResourceRecentFile>,
+}
+
 enum RecentFilesParseError {
     UnsupportedVersion(u64),
     Invalid(String),
+    UnsupportedResource,
 }
 
 pub fn get_recent_files() -> Result<Vec<RecentFileDto>, AppError> {
@@ -101,6 +117,12 @@ fn get_recent_files_from(path: &Path) -> Result<Vec<RecentFileDto>, AppError> {
         Err(RecentFilesParseError::UnsupportedVersion(version)) => {
             return Err(AppError::recent_files_version_unsupported(version));
         }
+        Err(RecentFilesParseError::UnsupportedResource) => {
+            return Err(AppError::new(
+                "RESOURCE_UNSUPPORTED",
+                "桌面最近文件接口无法表示 URI 资源",
+            ));
+        }
         Err(RecentFilesParseError::Invalid(message)) => {
             backup_corrupt_file(path)?;
             save_recent_files_to(path, &[])?;
@@ -143,12 +165,32 @@ fn parse_recent_files(raw: &str) -> Result<(Vec<RecentFileDto>, bool), RecentFil
             .get("version")
             .and_then(Value::as_u64)
             .ok_or_else(|| RecentFilesParseError::Invalid("version 必须是非负整数".to_string()))?;
-        if version != u64::from(RECENT_FILES_VERSION) {
+        if version != 1 && version != u64::from(RECENT_FILES_VERSION) {
             return Err(RecentFilesParseError::UnsupportedVersion(version));
         }
-        let document = serde_json::from_value::<RecentFilesDocument>(value)
-            .map_err(|error| RecentFilesParseError::Invalid(error.to_string()))?;
-        (document.files, false)
+        if version == 1 {
+            let document = serde_json::from_value::<RecentFilesDocument>(value)
+                .map_err(|error| RecentFilesParseError::Invalid(error.to_string()))?;
+            (document.files, true)
+        } else {
+            let document = serde_json::from_value::<ResourceRecentDocument>(value)
+                .map_err(|error| RecentFilesParseError::Invalid(error.to_string()))?;
+            let files = document
+                .files
+                .into_iter()
+                .map(|file| {
+                    let ResourceRef::DesktopFile { path } = file.resource else {
+                        return Err(RecentFilesParseError::UnsupportedResource);
+                    };
+                    Ok(RecentFileDto {
+                        path,
+                        title: file.title,
+                        last_opened_at: file.last_opened_at,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            (files, false)
+        }
     } else {
         return Err(RecentFilesParseError::Invalid(
             "最近文件文档必须是对象或旧版数组".to_string(),
@@ -200,9 +242,37 @@ fn save_recent_files_to(path: &Path, files: &[RecentFileDto]) -> Result<(), AppE
             "最近文件条目数量超过允许上限",
         ));
     }
-    let document = RecentFilesDocument {
+    if path.exists() {
+        let raw = read_recent_files_source(path)?;
+        match parse_recent_files(&raw) {
+            Ok((_, true)) => backup_legacy(path, &raw)?,
+            Ok((_, false)) => {}
+            Err(RecentFilesParseError::UnsupportedVersion(version)) => {
+                return Err(AppError::recent_files_version_unsupported(version))
+            }
+            Err(RecentFilesParseError::UnsupportedResource) => {
+                return Err(AppError::new(
+                    "RESOURCE_UNSUPPORTED",
+                    "桌面最近文件接口无法表示 URI 资源",
+                ))
+            }
+            Err(RecentFilesParseError::Invalid(message)) => {
+                return Err(AppError::recent_files_read_failed(message))
+            }
+        }
+    }
+    let document = ResourceRecentDocument {
         version: RECENT_FILES_VERSION,
-        files: files.to_vec(),
+        files: files
+            .iter()
+            .map(|file| ResourceRecentFile {
+                resource: ResourceRef::DesktopFile {
+                    path: file.path.clone(),
+                },
+                title: file.title.clone(),
+                last_opened_at: file.last_opened_at.clone(),
+            })
+            .collect(),
     };
     let content =
         serde_json::to_string_pretty(&document).map_err(AppError::recent_files_write_failed)?;
@@ -213,6 +283,23 @@ fn save_recent_files_to(path: &Path, files: &[RecentFileDto]) -> Result<(), AppE
         )));
     }
     atomic_write(path, content.as_bytes()).map_err(AppError::recent_files_write_failed)
+}
+
+fn backup_legacy(path: &Path, raw: &str) -> Result<(), AppError> {
+    let backup = path.with_extension("json.v1.bak");
+    match crate::utils::atomic_write::atomic_write_create_new(&backup, raw.as_bytes()) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            if read_recent_files_source(&backup)? == raw {
+                Ok(())
+            } else {
+                Err(AppError::recent_files_write_failed(
+                    "已有不同的旧版备份，已停止迁移",
+                ))
+            }
+        }
+        Err(error) => Err(AppError::recent_files_write_failed(error)),
+    }
 }
 
 fn read_recent_files_source(path: &Path) -> Result<String, AppError> {
@@ -288,6 +375,66 @@ mod tests {
             title: path.file_name().unwrap().to_str().unwrap().to_string(),
             path: path_string(path).to_string(),
             last_opened_at: "2026-08-13T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn resource_persistence_matches_shared_fixture() {
+        let fixtures: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../src/shared/resource-contract-fixtures.json"
+        ))
+        .unwrap();
+        let document: super::ResourceRecentDocument =
+            serde_json::from_value(fixtures["recentV2"].clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&document).unwrap(),
+            fixtures["recentV2"]
+        );
+        let (files, legacy) = super::parse_recent_files(&fixtures["recentV2"].to_string())
+            .unwrap_or_else(|_| panic!("resource fixture rejected"));
+        assert!(!legacy);
+        assert_eq!(
+            files[0].path,
+            fixtures["recentV2"]["files"][0]["resource"]["path"]
+        );
+    }
+
+    #[test]
+    fn migrates_v1_preserving_original_bytes_and_resource_paths() {
+        let directory = TestDirectory::new("recent-v1-resource");
+        let path = directory.path().join("recent.json");
+        let source = directory.path().join("100% #计划.md");
+        fs::write(&source, "# Test").unwrap();
+        let raw = serde_json::to_string(&json!({"version": 1, "files": [{
+            "path": source.to_str().unwrap(), "title": "100% #计划.md", "lastOpenedAt": "2026-09-23T00:00:00Z"
+        }]})).unwrap();
+        fs::write(&path, &raw).unwrap();
+        let files = get_recent_files_from(&path).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(
+            fs::read_to_string(path.with_extension("json.v1.bak")).unwrap(),
+            raw
+        );
+        let stored: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(stored["version"], 2);
+        assert_eq!(stored["files"][0]["resource"]["kind"], "desktopFile");
+        assert_eq!(stored["files"][0]["resource"]["path"], files[0].path);
+        assert_eq!(get_recent_files_from(&path).unwrap()[0].path, files[0].path);
+    }
+
+    #[test]
+    fn unsupported_resources_and_future_versions_cannot_be_pruned_or_overwritten() {
+        let directory = TestDirectory::new("recent-resource-preservation");
+        let path = directory.path().join("recent.json");
+        for raw in [
+            r#"{"version":99,"files":[]}"#,
+            r#"{"version":2,"files":[{"resource":{"kind":"androidDocument","uri":"content://provider/document/a"},"title":"a.md","lastOpenedAt":"2026-09-23T00:00:00Z"}]}"#,
+        ] {
+            fs::write(&path, raw).unwrap();
+            assert!(get_recent_files_from(&path).is_err());
+            assert!(save_recent_files_to(&path, &[]).is_err());
+            assert!(clear_unavailable_recent_files_from(&path).is_err());
+            assert_eq!(fs::read_to_string(&path).unwrap(), raw);
         }
     }
 

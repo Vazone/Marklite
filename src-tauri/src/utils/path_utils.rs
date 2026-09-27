@@ -32,9 +32,13 @@ pub fn app_data_dir() -> Result<PathBuf, AppError> {
             )
         })?
     } else {
-        dirs::data_dir()
+        #[cfg(target_os = "android")]
+        let directory = crate::platform::android::app_data_dir()?;
+        #[cfg(not(target_os = "android"))]
+        let directory = dirs::data_dir()
             .map(|base| base.join("MarkLite"))
-            .ok_or_else(|| AppError::new("APP_DATA_UNAVAILABLE", "无法找到应用数据目录"))?
+            .ok_or_else(|| AppError::new("APP_DATA_UNAVAILABLE", "无法找到应用数据目录"))?;
+        directory
     };
     create_app_data_directory(&dir)?;
     Ok(dir)

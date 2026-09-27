@@ -157,9 +157,27 @@ function compare(rows) {
 
 function capabilityMatrix(official) {
   const contract = JSON.parse(fs.readFileSync(path.join(root, 'src/shared/markdown-capabilities.json'), 'utf8'));
-  if (contract.schemaVersion !== 1) throw new Error('Unsupported capability contract version');
-  const surfaces = ['editor', 'preview', 'gui', 'cli', 'shell', 'html', 'pdf', 'docx'];
-  const allowed = new Set(['source', 'native', 'mapped', 'shared', 'windows', 'filtered', 'degraded', 'conditional', 'highlight-only', 'pending-verification']);
+  if (contract.schemaVersion !== 2) throw new Error('Unsupported capability contract version');
+  const surfaces = contract.surfaces;
+  if (!Array.isArray(surfaces) || new Set(surfaces).size !== surfaces.length || !surfaces.length) {
+    throw new Error('Missing or duplicate capability surfaces');
+  }
+  if (Object.keys(contract.surfaceEvidence ?? {}).sort().join(',') !== [...surfaces].sort().join(',')) {
+    throw new Error('Missing or unknown surface evidence');
+  }
+  for (const surface of surfaces) {
+    const evidence = contract.surfaceEvidence[surface];
+    if (!evidence.boundary || !evidence.implementation?.length || !evidence.tests?.length) {
+      throw new Error(`Incomplete implementation/test boundary: ${surface}`);
+    }
+    for (const reference of [...evidence.implementation, ...evidence.tests]) {
+      if (typeof reference !== 'string' || path.isAbsolute(reference) || reference.split(/[\\/]/).includes('..')
+        || !fs.statSync(path.join(root, reference), { throwIfNoEntry: false })?.isFile()) {
+        throw new Error(`Missing or invalid capability evidence: ${surface} ${reference}`);
+      }
+    }
+  }
+  const allowed = new Set(['source', 'native', 'mapped', 'shared', 'windows', 'filtered', 'degraded', 'conditional', 'highlight-only', 'pending-verification', 'unsupported']);
   const validateStatuses = (statuses, label) => {
     if (Object.keys(statuses).sort().join(',') !== [...surfaces].sort().join(',')) {
       throw new Error(`Missing or unknown capability surface: ${label}`);
@@ -196,7 +214,7 @@ function capabilityMatrix(official) {
     validateStatuses(extension.statuses, extension.id);
     matrix.push({ kind: 'named-extension', ...extension });
   }
-  return { profileModes: contract.profiles, matrix };
+  return { profileModes: contract.profiles, matrix, surfaceEvidence: contract.surfaceEvidence };
 }
 
 const args = process.argv.slice(2);
@@ -219,6 +237,7 @@ const report = compare(rows);
 const capability = capabilityMatrix(cases.filter((row) => row.suite !== 'MarkLite named extensions'));
 report.profileModes = capability.profileModes;
 report.capabilities = capability.matrix;
+report.surfaceEvidence = capability.surfaceEvidence;
 const extensionRows = new Map(rows
   .filter((row) => row.suite === 'MarkLite named extensions')
   .map((row) => [row.example, row]));

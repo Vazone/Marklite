@@ -1,0 +1,74 @@
+{
+  "valid": [
+    {
+      "kind": "desktopDirectory",
+      "path": "C:\\notes"
+    },
+    {
+      "kind": "desktopFile",
+      "path": "C:\\notes\\100% #计划.md"
+    },
+    {
+      "kind": "desktopFile",
+      "path": "\\\\server\\share\\note.md"
+    },
+    {
+      "kind": "desktopFile",
+      "path": "/notes/content:note.md"
+    },
+    {
+      "kind": "androidDocument",
+      "uri": "content://example.documents/document/primary%3Anotes%2Fa.md"
+    },
+    {
+      "kind": "androidTree",
+      "uri": "content://example.documents/tree/primary%3Anotes"
+    }
+  ],
+  "invalid": [
+    {
+      "kind": "file",
+      "path": "/notes/a.md"
+    },
+    {
+      "kind": "desktopFile",
+      "uri": "content://example/document/a"
+    },
+    {
+      "kind": "androidDocument",
+      "path": "/notes/a.md"
+    },
+    {
+      "kind": "desktopFile",
+      "path": "/notes/a.md",
+      "uri": "content://example/a"
+    },
+    null
+  ],
+  "sessionV2": {
+    "version": 2,
+    "resources": [
+      {
+        "kind": "desktopFile",
+        "path": "C:\\notes\\100% #计划.md"
+      }
+    ],
+    "activeResource": {
+      "kind": "desktopFile",
+      "path": "C:\\notes\\100% #计划.md"
+    }
+  },
+  "recentV2": {
+    "version": 2,
+    "files": [
+      {
+        "resource": {
+          "kind": "desktopFile",
+          "path": "C:\\notes\\100% #计划.md"
+        },
+        "title": "100% #计划.md",
+        "lastOpenedAt": "2026-09-23T00:00:00Z"
+      }
+    ]
+  }
+}

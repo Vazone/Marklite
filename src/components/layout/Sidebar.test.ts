@@ -77,6 +77,7 @@ async function renderSidebar(onRemoveRecent = vi.fn()) {
 function editorTab(path: string | null, id: string): EditorTab {
   return {
     id,
+    resource: path ? { kind: "desktopFile", path } : null,
     path,
     fileIdentity: path ? `test-file:${path}` : null,
     contentVersion: path ? `sha256:${path}` : null,
@@ -401,4 +402,26 @@ describe('Sidebar context menu positioning', () => {
     expect(left + width).toBeLessThanOrEqual(152);
     expect(top + maxHeight).toBeLessThanOrEqual(112);
   });
+});
+
+test('Android recent documents reopen by resource and can be removed without a desktop reveal action', async () => {
+  const resource = { kind: 'androidDocument' as const, uri: 'content://provider/document/note.md' };
+  const onOpenAndroidRecent = vi.fn(), onRemoveAndroidRecent = vi.fn(), onRevealRecent = vi.fn();
+  target = document.createElement('div');
+  document.body.append(target);
+  component = mount(Sidebar, { target, props: {
+    activeSidebarTab: 'recent', recentFiles: [],
+    androidRecentFiles: [{ resource, title: 'note.md', lastOpenedAt: '2026-09-25T00:00:00Z' }],
+    activeResource: resource, tab: undefined,
+    ...sidebarCallbacks({ onOpenAndroidRecent, onRemoveAndroidRecent, onRevealRecent })
+  } });
+  await tick();
+  expect(target.querySelector('.recent-item.current strong')?.textContent).toBe('note.md');
+  target.querySelector<HTMLButtonElement>('.recent-main')!.click();
+  expect(onOpenAndroidRecent).toHaveBeenCalledWith(resource);
+  target.querySelector<HTMLButtonElement>('.icon-danger')!.click();
+  expect(onRemoveAndroidRecent).toHaveBeenCalledWith(resource);
+  target.querySelector<HTMLElement>('.recent-item')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+  expect(target.querySelector('[role="menu"]')).toBeNull();
+  expect(onRevealRecent).not.toHaveBeenCalled();
 });

@@ -3,6 +3,8 @@
   import { Clock3, FileText, FolderOpen, Info, ListTree, PanelLeftClose, Trash2 } from 'lucide-svelte';
   import type { SidebarDocumentView } from '../../app/stores/documentStore';
   import type { RecentFileDto } from '../../lib/tauriApi';
+  import type { AndroidRecentDocument } from '../../lib/platform/androidDocuments';
+  import { desktopFile, isSameResource, type ResourceRef } from '../../lib/platform/resources';
   import type { SidebarTab } from '../../app/stores/uiStore';
   import { clampContextMenuPosition, type ContextMenuPosition } from '../../lib/contextMenuPosition';
   import { isSameFilePath } from '../../lib/filePathIdentity';
@@ -15,11 +17,15 @@
 
   export let activeSidebarTab: SidebarTab = 'recent';
   export let recentFiles: RecentFileDto[] = [];
+  export let androidRecentFiles: AndroidRecentDocument[] = [];
+  export let activeResource: ResourceRef | null = null;
   export let tab: SidebarDocumentView | undefined;
   export let onTabChange: (tab: SidebarTab) => void;
   export let onOpenRecent: (path: string) => void;
   export let onRemoveRecent: (path: string) => void;
   export let onRevealRecent: (path: string) => void;
+  export let onOpenAndroidRecent: (resource: ResourceRef) => void = () => undefined;
+  export let onRemoveAndroidRecent: (resource: ResourceRef) => void = () => undefined;
   export let onJumpToLine: (line: number) => void;
   export let onCollapse: () => void;
 
@@ -27,9 +33,13 @@
 
   $: currentLine = tab?.scrollPosition.line ?? tab?.cursorPosition.line ?? 1;
   $: currentOutline = outlineItemAtLine(tab?.outline ?? [], currentLine);
-  $: currentRecentIndex = tab?.path
-    ? recentFiles.findIndex((file) => isSameFilePath(file.path, tab?.path))
-    : -1;
+  $: recentRows = [
+    ...recentFiles.map(file => ({ ...file, resource: desktopFile(file.path) })),
+    ...androidRecentFiles
+  ].sort((left, right) => right.lastOpenedAt.localeCompare(left.lastOpenedAt));
+  $: currentRecentIndex = recentRows.findIndex(file => activeResource
+    ? isSameResource(file.resource, activeResource)
+    : file.resource.kind === 'desktopFile' && tab?.path && isSameFilePath(file.resource.path, tab.path));
 
   onMount(() => {
     const close = () => {
@@ -76,6 +86,9 @@
 
 <aside class="sidebar">
   <div class="sidebar-tabs">
+    <button type="button" class:active={activeSidebarTab === 'files'} title={$translator('workspace.files')} on:click={() => onTabChange('files')}>
+      <FolderOpen size={16} />
+    </button>
     <button type="button" class:active={activeSidebarTab === 'recent'} title={$translator('sidebar.recent')} on:click={() => onTabChange('recent')}>
       <Clock3 size={16} />
     </button>
@@ -90,24 +103,27 @@
     </button>
   </div>
 
-  {#if activeSidebarTab === 'recent'}
+  {#if activeSidebarTab === 'files'}
+    <slot name="files" />
+  {:else if activeSidebarTab === 'recent'}
     <section class="sidebar-section">
       <h2>{$translator('sidebar.recent')}</h2>
-      {#if recentFiles.length}
+      {#if recentRows.length}
         <div class="recent-list" role="list">
-          {#each recentFiles as file, index}
+          {#each recentRows as file, index}
             <div
               class="recent-item"
               class:current={index === currentRecentIndex}
               role="listitem"
-              title={file.path}
-              on:contextmenu={(event) => openRecentContext(event, file.path)}
+              title={file.resource.kind === 'desktopFile' ? file.resource.path : file.title}
+              on:contextmenu={(event) => { if (file.resource.kind === 'desktopFile') openRecentContext(event, file.resource.path); }}
             >
               <button
                 type="button"
                 class="recent-main"
                 aria-current={index === currentRecentIndex ? 'page' : undefined}
-                on:click={() => onOpenRecent(file.path)}
+                on:click={() => file.resource.kind === 'desktopFile'
+                  ? onOpenRecent(file.resource.path) : onOpenAndroidRecent(file.resource)}
               >
                 <FileText class="recent-file-icon" size={15} aria-hidden="true" />
                 <span class="recent-file-text">
@@ -115,7 +131,9 @@
                   <small>{new Date(file.lastOpenedAt).toLocaleString($currentLanguage)}</small>
                 </span>
               </button>
-              <button type="button" class="icon-danger" title={$translator('sidebar.removeRecent')} on:click={() => onRemoveRecent(file.path)}>
+              <button type="button" class="icon-danger" title={$translator('sidebar.removeRecent')}
+                on:click={() => file.resource.kind === 'desktopFile'
+                  ? onRemoveRecent(file.resource.path) : onRemoveAndroidRecent(file.resource)}>
                 <Trash2 class="recent-action-icon" size={14} aria-hidden="true" />
               </button>
             </div>

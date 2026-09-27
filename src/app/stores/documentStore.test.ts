@@ -438,3 +438,63 @@ describe('async response ownership', () => {
     expect(store.getTab(reopened.id)?.content).toBe('# Third');
   });
 });
+
+
+test('desktop resource follows hydration and save-as without decoding its path', () => {
+  const store = createDocumentStore();
+  const original = 'C:\\docs\\100% #原文.md';
+  store.restoreSessionTabs([original], original);
+  const tab = get(store).tabs.find(tab => tab.path === original)!;
+  expect(tab.resource).toEqual({ kind: 'desktopFile', path: original });
+  expect(store.hydrateDocument(tab.id, original, document(original))).toBe(true);
+  const next = 'C:\\docs\\另存%23.md';
+  const current = store.getTab(tab.id)!;
+  expect(store.markSaved(tab.id, current.contentRevision, document(next))).toBe(true);
+  expect(store.getTab(tab.id)?.resource).toEqual({ kind: 'desktopFile', path: next });
+});
+
+
+test('metadata diagnostics follow analysis revisions and clear after correction', () => {
+  const store = createDocumentStore();
+  const tab = store.openDocument(document('C:/docs/metadata.md', '---\na: [\n---'));
+  const diagnostic = { code: 'FRONT_MATTER_INVALID', message: 'Invalid YAML', line: 2, column: 4 };
+  const first = { ...rendered('<p>a: [</p>'), markdownDiagnostics: [diagnostic] };
+  expect(store.updateRendered(tab.id, tab.contentRevision, first)).toBe(true);
+  expect(get(store).tabs.find(item => item.id === tab.id)?.markdownDiagnostics).toEqual([diagnostic]);
+  store.updateContent(tab.id, '---\na: valid\n---');
+  const revised = get(store).tabs.find(item => item.id === tab.id)!;
+  expect(revised.analysisRevision).not.toBe(revised.contentRevision);
+  expect(store.updateAnalysis(tab.id, tab.contentRevision, first)).toBe(false);
+  expect(store.updateAnalysis(tab.id, revised.contentRevision, rendered(''))).toBe(true);
+  const corrected = get(store).tabs.find(item => item.id === tab.id)!;
+  expect(corrected.markdownDiagnostics).toEqual([]);
+  expect(corrected.analysisRevision).toBe(corrected.contentRevision);
+  expect(store.updateRendered(tab.id, tab.contentRevision, first)).toBe(false);
+  expect(get(store).tabs.find(item => item.id === tab.id)?.markdownDiagnostics).toEqual([]);
+});
+
+test('restored Android resources keep distinct URI identity and hydrate without a path', () => {
+  const store = createDocumentStore();
+  const first = { kind: 'androidDocument' as const, uri: 'content://provider/a/note.md' };
+  const second = { kind: 'androidDocument' as const, uri: 'content://provider/b/note.md' };
+  store.restoreResourceSessionTabs([first, second], second);
+  const tabs = get(store).tabs;
+  expect(tabs).toHaveLength(2);
+  expect(get(store).activeTabId).toBe(tabs[1].id);
+  expect(tabs.map(tab => tab.resource)).toEqual([first, second]);
+  expect(tabs.map(tab => tab.title)).toEqual(['Document.md', 'Document.md']);
+  expect(store.setDeferredResourceTitle(tabs[0].id, second, 'wrong.md')).toBe(false);
+  expect(store.setDeferredResourceTitle(tabs[0].id, first, 'first.md')).toBe(true);
+  expect(store.setDeferredResourceTitle(tabs[1].id, second, 'second.md')).toBe(true);
+  expect(store.getTab(tabs[0].id)).toMatchObject({ title: 'first.md', content: '', loadState: 'unloaded' });
+  expect(store.getTab(tabs[1].id)).toMatchObject({ title: 'second.md', content: '', loadState: 'unloaded' });
+  expect(store.hydrateDocument(tabs[0].id, second, { path: null, resource: first,
+    fileIdentity: 'android:a', contentVersion: 'sha256:a', title: 'note.md', content: '# A',
+    isDirty: false, lastSavedAt: null, fileSize: 3 })).toBe(false);
+  expect(store.hydrateDocument(tabs[0].id, first, { path: null, resource: first,
+    fileIdentity: 'android:a', contentVersion: 'sha256:a', title: 'note.md', content: '# A',
+    isDirty: false, lastSavedAt: null, fileSize: 3 })).toBe(true);
+  expect(store.getTab(tabs[0].id)).toMatchObject({ resource: first, path: null, content: '# A' });
+  expect(store.setDeferredResourceTitle(tabs[0].id, first, 'late.md')).toBe(false);
+  expect(store.getTab(tabs[0].id)?.title).toBe('note.md');
+});

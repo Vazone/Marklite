@@ -118,7 +118,10 @@ fn resolve_local_document(
     let path = resolve_local_path_from_path(document_path, path)?;
     file_service::ensure_allowed_file(&path)?;
     Ok(MarkdownTargetDto::LocalDocument {
-        path: path_to_utf8(&path)?.to_string(),
+        resource: crate::models::resource::ResourceRef::DesktopFile {
+            path: path_to_utf8(&path)?.to_string(),
+        },
+        path: Some(path_to_utf8(&path)?.to_string()),
         fragment,
     })
 }
@@ -342,7 +345,10 @@ mod tests {
         assert_eq!(
             resolved,
             MarkdownTargetDto::LocalDocument {
-                path: target.to_string_lossy().to_string(),
+                resource: crate::models::resource::ResourceRef::DesktopFile {
+                    path: target.to_string_lossy().to_string()
+                },
+                path: Some(target.to_string_lossy().to_string()),
                 fragment: Some("heading".to_string())
             }
         );
@@ -365,7 +371,10 @@ mod tests {
         assert_eq!(
             resolved,
             MarkdownTargetDto::LocalDocument {
-                path: literal.to_string_lossy().to_string(),
+                resource: crate::models::resource::ResourceRef::DesktopFile {
+                    path: literal.to_string_lossy().to_string()
+                },
+                path: Some(literal.to_string_lossy().to_string()),
                 fragment: None,
             }
         );
@@ -428,7 +437,10 @@ mod tests {
             assert_eq!(
                 resolve_markdown_target(Some(&current.to_string_lossy()), target).unwrap(),
                 MarkdownTargetDto::LocalDocument {
-                    path: expected.to_string_lossy().to_string(),
+                    resource: crate::models::resource::ResourceRef::DesktopFile {
+                        path: expected.to_string_lossy().to_string()
+                    },
+                    path: Some(expected.to_string_lossy().to_string()),
                     fragment: None,
                 }
             );
@@ -463,7 +475,10 @@ mod tests {
         assert_eq!(
             resolve_markdown_target(Some(&current.to_string_lossy()), "alias/target.md").unwrap(),
             MarkdownTargetDto::LocalDocument {
-                path: target.to_string_lossy().to_string(),
+                resource: crate::models::resource::ResourceRef::DesktopFile {
+                    path: target.to_string_lossy().to_string()
+                },
+                path: Some(target.to_string_lossy().to_string()),
                 fragment: None,
             }
         );

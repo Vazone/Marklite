@@ -40,6 +40,12 @@ function pointerEvent(type: string, clientX: number, clientY: number, pointerId 
   return event;
 }
 
+function touchEvent(type: string, points: [number, number][]) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'touches', { value: points.map(([clientX, clientY]) => ({ clientX, clientY })) });
+  return event;
+}
+
 beforeEach(() => {
   ResizeObserverMock.instances = [];
   vi.stubGlobal('ResizeObserver', ResizeObserverMock);
@@ -56,6 +62,35 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 describe('MindMapPane', () => {
+  test('zooms its canvas without changing the node layout or action bar', async () => {
+    target = document.createElement('div');
+    document.body.append(target);
+    component = mount(MindMapPane, {
+      target,
+      props: {
+        documentTitle: 'Project.md',
+        outline: [{ level: 1, title: 'Plan', line: 1, slug: 'plan' }],
+        mobile: true,
+        onJumpToLine: vi.fn()
+      }
+    });
+    await tick();
+    const viewport = target.querySelector<HTMLElement>('.mind-map-viewport')!;
+    const canvas = target.querySelector<HTMLElement>('.mind-map-canvas')!;
+    const baseWidth = canvas.style.width;
+    viewport.dispatchEvent(touchEvent('touchstart', [[50, 50], [150, 50]]));
+    viewport.dispatchEvent(touchEvent('touchmove', [[0, 50], [200, 50]]));
+    await tick();
+    expect(canvas.style.zoom).toBe('2');
+    expect(canvas.style.width).toBe(baseWidth);
+    expect(target.querySelector('.mind-map-actions')).not.toBeNull();
+    viewport.dispatchEvent(touchEvent('touchend', []));
+    viewport.dispatchEvent(touchEvent('touchstart', [[0, 50], [200, 50]]));
+    viewport.dispatchEvent(touchEvent('touchmove', [[50, 50], [150, 50]]));
+    await tick();
+    expect(canvas.style.zoom).toBe('1');
+  });
+
   test('collapses descendants without editing and jumps through the supplied callback', async () => {
     const onJumpToLine = vi.fn();
     target = document.createElement('div');

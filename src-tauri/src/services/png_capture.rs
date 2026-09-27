@@ -2,7 +2,7 @@ use std::{
     path::Path,
     sync::{
         atomic::{AtomicU64, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc,
     },
     time::{Duration, Instant},
 };
@@ -16,58 +16,7 @@ static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Default)]
-enum ControlState {
-    #[default]
-    Running,
-    Cancelled,
-    Committed,
-}
-#[derive(Clone, Default)]
-pub(crate) struct CaptureControl(Arc<Mutex<ControlState>>);
-impl CaptureControl {
-    pub(crate) fn cancel(&self) -> bool {
-        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if matches!(*state, ControlState::Running) {
-            *state = ControlState::Cancelled;
-            true
-        } else {
-            false
-        }
-    }
-    pub(crate) fn check(&self) -> Result<(), AppError> {
-        if matches!(
-            *self.0.lock().unwrap_or_else(|e| e.into_inner()),
-            ControlState::Cancelled
-        ) {
-            Err(AppError::new("EXPORT_CANCELLED", "图片导出已取消"))
-        } else {
-            Ok(())
-        }
-    }
-    pub(crate) fn commit(
-        &self,
-        commit: impl FnOnce() -> Result<(), AppError>,
-    ) -> Result<(), AppError> {
-        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if !matches!(*state, ControlState::Running) {
-            return Err(AppError::new("EXPORT_CANCELLED", "图片导出已取消或完成"));
-        }
-        let result = commit();
-        *state = if result.is_ok() {
-            ControlState::Committed
-        } else {
-            ControlState::Cancelled
-        };
-        result
-    }
-}
-
-pub(crate) struct CapturedImage {
-    pub bytes: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
-}
+pub(crate) use super::export_control::{CaptureControl, CapturedImage};
 
 #[derive(Deserialize)]
 #[serde(tag = "status", rename_all = "camelCase", deny_unknown_fields)]

@@ -1,10 +1,10 @@
-import { history, undoDepth } from '@codemirror/commands';
+import { history, undo, redo, undoDepth } from '@codemirror/commands';
 import { EditorSelection, EditorState } from '@codemirror/state';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   createEditorSessionSnapshotController,
   createEditorState,
-  serializeEditorState
+  snapshotEditorState
 } from './editorSession';
 
 afterEach(() => {
@@ -20,8 +20,8 @@ describe('CodeMirror editor session snapshots', () => {
     }).state;
     expect(undoDepth(state)).toBe(1);
 
-    const restored = createEditorState('one two', [history()], serializeEditorState(state));
-    const serialized = serializeEditorState(state);
+    const restored = createEditorState('one two', [history()], snapshotEditorState(state));
+    const serialized = snapshotEditorState(state);
 
     expect(restored.doc.toString()).toBe('one two');
     expect(restored.selection.main.from).toBe(0);
@@ -30,11 +30,28 @@ describe('CodeMirror editor session snapshots', () => {
     expect(serialized).not.toHaveProperty('doc');
   });
 
-  test('falls back to a clean state for mismatched or corrupt snapshots', () => {
-    const corrupt = createEditorState('current', [history()], { selection: 'invalid' });
+  test('falls back to a clean state when a stale selection exceeds the document', () => {
+    const corrupt = createEditorState('current', [history()], { selection: EditorSelection.single(100) });
 
     expect(corrupt.doc.toString()).toBe('current');
     expect(undoDepth(corrupt)).toBe(0);
+  });
+
+  test('does not flatten or serialize content and preserves working undo/redo', () => {
+    const original = EditorState.create({ doc: 'one', extensions: [history()] });
+    const edited = original.update({ changes: { from: 3, insert: ' two' } }).state;
+    const flatten = vi.spyOn(edited, 'sliceDoc');
+    const serialize = vi.spyOn(edited, 'toJSON');
+    const snapshot = snapshotEditorState(edited);
+    expect(snapshot.selection).toBe(edited.selection);
+    expect(flatten).not.toHaveBeenCalled();
+    expect(serialize).not.toHaveBeenCalled();
+    let restored = createEditorState('one two', [history()], snapshot);
+    const target = { get state() { return restored; }, dispatch: (tr: { state: EditorState }) => { restored = tr.state; } };
+    expect(undo(target)).toBe(true);
+    expect(restored.doc.toString()).toBe('one');
+    expect(redo(target)).toBe(true);
+    expect(restored.doc.toString()).toBe('one two');
   });
 
   test('coalesces hot-path requests and serializes only the latest state after the delay', () => {
@@ -42,7 +59,7 @@ describe('CodeMirror editor session snapshots', () => {
     const first = EditorState.create({ doc: 'first', extensions: [history()] });
     const latest = EditorState.create({ doc: 'latest', extensions: [history()] });
     const emit = vi.fn();
-    const serialize = vi.fn(serializeEditorState);
+    const serialize = vi.fn(snapshotEditorState);
     const controller = createEditorSessionSnapshotController(emit, { delayMs: 250, serialize });
 
     controller.request(first);
@@ -66,7 +83,7 @@ describe('CodeMirror editor session snapshots', () => {
     const first = EditorState.create({ doc: 'first', extensions: [history()] });
     const latest = EditorState.create({ doc: 'latest', extensions: [history()] });
     const emit = vi.fn();
-    const serialize = vi.fn(serializeEditorState);
+    const serialize = vi.fn(snapshotEditorState);
     const controller = createEditorSessionSnapshotController(emit, { delayMs: 250, serialize });
 
     controller.request(first);

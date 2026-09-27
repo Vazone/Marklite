@@ -15,6 +15,15 @@ const linePrefixes: Record<LineFormat, string> = {
 const existingLinePrefix = /^(\s*)(- \[[ xX]\] +|#{1,6} +|> +|[-+*] +|\d+[.)] +)/;
 
 export function formatLines(state: EditorState, action: LineFormat): TransactionSpec | null {
+  if (state.selection.ranges.length === 1 && state.selection.main.empty) {
+    const line = state.doc.lineAt(state.selection.main.from);
+    if (!line.text.trim()) {
+      const indent = /^\s*/.exec(line.text)![0];
+      const insert = `${indent}${linePrefixes[action]}`;
+      return { changes: { from: line.from, to: line.to, insert },
+        selection: EditorSelection.cursor(line.from + insert.length) };
+    }
+  }
   const changes: ChangeSpec[] = [];
   const prefix = linePrefixes[action];
   let processedThrough = 0;

@@ -2,6 +2,9 @@ import { mount, unmount } from 'svelte';
 import './styles/globals.css';
 import './styles/themes.css';
 import './styles/markdown-preview.css';
+import './shared/markdown-toc.css';
+import { installCodeStyles } from './lib/codeStyles';
+installCodeStyles();
 import { api } from './lib/tauriApi';
 import {
   claimStartupRetry,

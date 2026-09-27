@@ -18,12 +18,16 @@
   export let progress: ExportProgressView | null = null;
   export let busy = false;
   export let documentTitle = '';
+  export let availableExportFormats: ExportFormat[] = ['html', 'pdf', 'docx', 'png', 'svg'];
+  export let allowLocalImageExport = true;
+  export let androidExport = false;
   export let onCancel: (() => void) | undefined = undefined;
   export let cancelRequested = false;
   export let onExport: (format: ExportFormat, options: ExportOptions) => void;
   export let onClose: () => void;
 
   let format: ExportFormat = 'html';
+  $: if (availableExportFormats.length && !availableExportFormats.includes(format)) format = availableExportFormats[0];
   let options: ExportOptions = { ...defaultExportOptions };
 
   function update<K extends keyof ExportOptions>(key: K, value: ExportOptions[K]): void {
@@ -53,11 +57,11 @@
           <label>
             <span>{$translator('export.fileFormat')}</span>
             <select bind:value={format} disabled={busy}>
-              <option value="html">{$translator('export.format.html')}</option>
-              <option value="pdf">{$translator('export.format.pdf')}</option>
-              <option value="docx">{$translator('export.format.docx')}</option>
-              <option value="png">{$translator('export.format.png')}</option>
-              <option value="svg">{$translator('export.format.svg')}</option>
+              {#if availableExportFormats.includes('html')}<option value="html">{$translator('export.format.html')}</option>{/if}
+              {#if availableExportFormats.includes('pdf')}<option value="pdf">{$translator('export.format.pdf')}</option>{/if}
+              {#if availableExportFormats.includes('docx')}<option value="docx">{$translator('export.format.docx')}</option>{/if}
+              {#if availableExportFormats.includes('png')}<option value="png">{$translator('export.format.png')}</option>{/if}
+              {#if availableExportFormats.includes('svg')}<option value="svg">{$translator('export.format.svg')}</option>{/if}
             </select>
           </label>
 
@@ -100,6 +104,10 @@
             </div>
           {/if}
 
+          {#if format === 'pdf' && androidExport}
+            <p class="export-note">{$translator('export.androidPdfNote')}</p>
+          {/if}
+
           {#if format === 'png'}
             <p class="export-note">{$translator('export.pngNote')}</p>
           {/if}
@@ -117,23 +125,25 @@
                 on:change={(event) => update('includeTitle', event.currentTarget.checked)}
               />
             </label>
-            <label class="switch-row">
-              <span>{$translator('export.includeImages')}</span>
-              <input
-                type="checkbox"
-                checked={options.includeLocalImages}
-                disabled={busy}
-                on:change={(event) => update('includeLocalImages', event.currentTarget.checked)}
-              />
-            </label>
-            <p class="export-note">
-              {$translator('export.resourceNote')}
-            </p>
+            {#if allowLocalImageExport}
+              <label class="switch-row">
+                <span>{$translator('export.includeImages')}</span>
+                <input
+                  type="checkbox"
+                  checked={options.includeLocalImages}
+                  disabled={busy}
+                  on:change={(event) => update('includeLocalImages', event.currentTarget.checked)}
+                />
+              </label>
+              <p class="export-note">
+                {$translator('export.resourceNote')}
+              </p>
+            {/if}
           {/if}
         </div>
 
         <footer class="dialog-footer">
-          <button type="button" class="ghost-button" disabled={busy && (!onCancel || format !== 'png' || cancelRequested)} on:click={() => busy ? onCancel?.() : onClose()}>{$translator(cancelRequested ? 'export.cancelling' : 'common.cancel')}</button>
+          <button type="button" class="ghost-button" disabled={busy && (!onCancel || (format !== 'png' && !(format === 'pdf' && androidExport)) || cancelRequested)} on:click={() => busy ? onCancel?.() : onClose()}>{$translator(cancelRequested ? 'export.cancelling' : 'common.cancel')}</button>
           <button type="submit" class="primary-button" disabled={busy}>
             {busy ? $translator('export.exporting') : $translator(format === 'png' ? 'export.exportImages' : 'export.chooseTarget')}
           </button>

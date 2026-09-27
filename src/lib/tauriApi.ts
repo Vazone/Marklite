@@ -2,6 +2,8 @@ import { createTauriClient } from './platform/tauriClient';
 import { runtimeCommandTransport } from './platform/runtime';
 
 export * from './platform/contracts';
+export * from './platform/workspace';
+export type { WorkspaceClient } from './platform/workspaceClient';
 export * from './platform/contractValidation';
 export * from './platform/dialogs';
 export * from './platform/externalLinks';

@@ -3,6 +3,7 @@
 </script>
 
 <script lang="ts">
+  import { editorCodeHighlight } from '../../lib/editorCodeHighlight';
   import { onDestroy, onMount, tick } from 'svelte';
   import {
     Compartment,
@@ -28,7 +29,6 @@
   } from '@codemirror/view';
   import {
     bracketMatching,
-    defaultHighlightStyle,
     foldGutter,
     foldKeymap,
     indentOnInput,
@@ -45,21 +45,23 @@
   import {
     createEditorSessionSnapshotController,
     createEditorState,
-    type SerializedEditorState
+    type EditorSnapshot
   } from '../../lib/editorSession';
   import { startupElapsedMs } from '../../lib/startupLifecycle';
   import { codeMirrorShortcutFor } from '../../lib/commands';
   import { formatCodeBlock, formatInlineCode, formatLines } from '../../lib/editorFormatting';
-  import { editorMarkdownLanguage } from '../../lib/editorMarkdownLanguage';
+  import { createEditorLanguage, editorHighlightStyle } from '../../lib/editorMarkdownLanguage';
+  import { editorText } from '../../lib/editorText';
   import {
     editorSearchReplacementChange,
     editorSearchMatchAtPosition,
     findEditorSearchMatches,
     firstEditorSearchMatchAtOrAfter,
-    updateEditorSearchMatches,
     visibleEditorSearchMatches,
     type EditorSearchMatch
   } from '../../lib/editorSearch';
+  import { startEditorSearch } from '../../lib/editorSearchTask';
+  import { createPaneZoom, type PaneZoom } from '../../lib/panePinchZoom';
 
   const setSearchDecorations = StateEffect.define<DecorationSet>();
   const searchDecorations = StateField.define<DecorationSet>({
@@ -78,16 +80,19 @@
   export let tabId: string;
   export let value = '';
   export let settings: AppSettings;
-  export let serializedState: SerializedEditorState | null = null;
+  export let mobile = false;
+  export let serializedState: EditorSnapshot | null = null;
   export let initialScrollPosition: EditorScrollPosition;
   export let onChange: (tabId: string, value: string, lineCount: number) => void;
   export let onDirty: (tabId: string) => void;
   export let onCursorChange: (tabId: string, position: CursorPosition) => void;
   export let onScrollSync: (tabId: string, position: EditorScrollPosition, userInitiated: boolean) => void;
-  export let onSessionChange: (tabId: string, state: SerializedEditorState) => void;
+  export let onSessionChange: (tabId: string, state: EditorSnapshot) => void;
 
   let host: HTMLDivElement;
   let view: EditorView | null = null;
+  let paneZoom: PaneZoom | null = null;
+  let paneZoomMobile = mobile;
   let lastExternalValue = value;
   let lastSettingsSignature = '';
   let searchOpen = false;
@@ -98,6 +103,9 @@
   let replaceInput: HTMLInputElement | null = null;
   let searchMatches: EditorSearchMatch[] = [];
   let activeMatchIndex = -1;
+  let searchPending = false;
+  let cancelSearch: (() => void) | null = null;
+  let replacementAnchor: number | null = null;
   let scrollFrame = 0;
   let removeScrollListener: (() => void) | null = null;
   let userEditorScrollUntil = 0;
@@ -105,6 +113,7 @@
   let pendingDocument: Text | null = null;
   let applyingExternalValue = false;
   let editorMountFailed = false;
+  let editorLanguage: ReturnType<typeof createEditorLanguage> | null = null;
   const editorMountStartedAt = performance.now();
   const recordStartupEditorMount = !editorStartupMountReported;
   editorStartupMountReported = true;
@@ -112,8 +121,17 @@
   const keymapCompartment = new Compartment();
   const sessionSnapshots = createEditorSessionSnapshotController((state) => onSessionChange(tabId, state));
 
-  $: matchCounter = searchQuery ? `${searchMatches.length ? activeMatchIndex + 1 : 0}/${searchMatches.length}` : '0/0';
-  $: canReplace = searchQuery.trim().length > 0 && searchMatches.length > 0;
+  $: matchCounter = searchPending ? '…' : searchQuery ? `${searchMatches.length ? activeMatchIndex + 1 : 0}/${searchMatches.length}` : '0/0';
+  $: canReplace = !searchPending && searchQuery.trim().length > 0 && searchMatches.length > 0;
+  $: if (view && (!paneZoom || paneZoomMobile !== mobile)) {
+    paneZoom?.dispose();
+    paneZoomMobile = mobile;
+    paneZoom = createPaneZoom(host, view.dom, () => view?.requestMeasure(), { wheel: !mobile });
+  }
+  $: if (!view && paneZoom) {
+    paneZoom.dispose();
+    paneZoom = null;
+  }
 
   onMount(() => {
     mountEditor();
@@ -123,10 +141,12 @@
     cleanupEditorView(false);
     recordEditorMount('started');
     try {
+      editorLanguage = createEditorLanguage();
       const extensions = [
         history(),
         EditorState.allowMultipleSelections.of(true),
-        editorMarkdownLanguage(),
+        editorLanguage.support,
+        editorCodeHighlight(),
         indentOnInput(),
         bracketMatching(),
         drawSelection(),
@@ -135,7 +155,7 @@
         highlightSelectionMatches(),
         searchDecorations,
         foldGutter(),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        syntaxHighlighting(editorHighlightStyle, { fallback: true }),
         keymapCompartment.of(keymap.of(editorKeymap())),
         EditorView.updateListener.of(handleUpdate),
         optionsCompartment.of(optionExtensions())
@@ -148,15 +168,16 @@
       view = createdView;
       createdView.scrollDOM.addEventListener('scroll', scheduleScrollSync, { passive: true });
       const markUserScroll = () => { userEditorScrollUntil = performance.now() + 500; };
+      const markWheelScroll = (event: WheelEvent) => { if (!event.ctrlKey) markUserScroll(); };
       const markDragScroll = (event: PointerEvent) => { if (event.buttons) markUserScroll(); };
-      createdView.scrollDOM.addEventListener('wheel', markUserScroll, { passive: true });
+      createdView.scrollDOM.addEventListener('wheel', markWheelScroll, { passive: true });
       createdView.scrollDOM.addEventListener('pointerdown', markUserScroll, { passive: true });
       createdView.scrollDOM.addEventListener('pointermove', markDragScroll, { passive: true });
       createdView.scrollDOM.addEventListener('touchstart', markUserScroll, { passive: true });
       createdView.scrollDOM.addEventListener('keydown', markUserScroll);
       removeScrollListener = () => {
         createdView.scrollDOM.removeEventListener('scroll', scheduleScrollSync);
-        createdView.scrollDOM.removeEventListener('wheel', markUserScroll);
+        createdView.scrollDOM.removeEventListener('wheel', markWheelScroll);
         createdView.scrollDOM.removeEventListener('pointerdown', markUserScroll);
         createdView.scrollDOM.removeEventListener('pointermove', markDragScroll);
         createdView.scrollDOM.removeEventListener('touchstart', markUserScroll);
@@ -186,6 +207,10 @@
   }
 
   function cleanupEditorView(persist: boolean) {
+    paneZoom?.dispose();
+    paneZoom = null;
+    cancelSearch?.();
+    cancelSearch = null;
     if (persist && view) {
       flushContent();
       sessionSnapshots.flush(view.state);
@@ -202,6 +227,8 @@
     pendingDocument = null;
     view?.destroy();
     view = null;
+    editorLanguage?.dispose();
+    editorLanguage = null;
   }
 
   onDestroy(() => {
@@ -239,8 +266,7 @@
       }
 
       if (searchOpen) {
-        searchMatches = updateEditorSearchMatches(update.state.doc, searchQuery, searchMatches, update.changes);
-        refreshSearchState({ keepActiveNearSelection: true, selectActive: false });
+        refreshSearchMatches({ keepActiveNearSelection: true, selectActive: false });
       }
 
       scheduleScrollSync();
@@ -271,7 +297,7 @@
     const document = pendingDocument;
     pendingDocument = null;
     if (!document) return;
-    const next = document.toString();
+    const next = editorText(document);
     lastExternalValue = next;
     onChange(tabId, next, document.lines);
   }
@@ -444,13 +470,13 @@
         wrapSelection('[', '](https://example.com)', t('editor.insert.link'));
         break;
       case 'image':
-        insertBlock(t('editor.insert.image'));
+        insertBlock(t('editor.insert.image'), block => ({ from: 2, to: block.indexOf('](') }));
         break;
       case 'codeBlock':
         dispatchFormatting(formatCodeBlock(view.state));
         break;
       case 'table':
-        insertBlock(t('editor.insert.table'));
+        insertBlock(t('editor.insert.table'), () => ({ from: 2, to: 2 }));
         break;
       case 'hr':
         insertBlock('---');
@@ -489,6 +515,9 @@
   }
 
   function closeFind() {
+    cancelSearch?.();
+    cancelSearch = null;
+    searchPending = false;
     searchOpen = false;
     searchMatches = [];
     activeMatchIndex = -1;
@@ -569,20 +598,13 @@
     if (!match) return;
 
     const nextSearchAnchor = match.from + replaceValue.length;
+    replacementAnchor = nextSearchAnchor;
     view.dispatch({
       changes: { from: match.from, to: match.to, insert: replaceValue },
+      annotations: isolateHistory.of('full'),
       selection: EditorSelection.cursor(nextSearchAnchor)
     });
 
-    if (!searchMatches.length) {
-      activeMatchIndex = -1;
-      updateSearchDecorations();
-      void tick().then(() => replaceInput?.focus());
-      return;
-    }
-
-    activeMatchIndex = firstMatchIndexAtOrAfter(nextSearchAnchor);
-    selectActiveMatch('replace');
   }
 
   function replaceAllMatches() {
@@ -591,25 +613,44 @@
     const anchor = searchMatches[0]?.from ?? 0;
     const replacementChange = editorSearchReplacementChange(view.state.doc, searchMatches, replaceValue);
     if (!replacementChange) return;
+    replacementAnchor = anchor + replaceValue.length;
     view.dispatch({
       changes: replacementChange,
+      annotations: isolateHistory.of('full'),
       selection: EditorSelection.cursor(anchor + replaceValue.length)
     });
 
-    activeMatchIndex = searchMatches.length ? firstMatchIndexAtOrAfter(anchor + replaceValue.length) : -1;
-
-    if (searchMatches.length) {
-      selectActiveMatch('replace');
-    } else {
-      updateSearchDecorations();
-      void tick().then(() => replaceInput?.focus());
-    }
   }
 
   function refreshSearchMatches(options: { keepActiveNearSelection?: boolean; selectActive?: boolean } = {}) {
+    cancelSearch?.();
+    cancelSearch = null;
     if (!view) return;
-    searchMatches = findEditorSearchMatches(view.state.doc, searchQuery);
-    refreshSearchState(options);
+    const document = view.state.doc;
+    const query = searchQuery;
+    const anchor = replacementAnchor;
+    replacementAnchor = null;
+    const complete = (matches: EditorSearchMatch[]) => {
+      if (!view || !searchOpen || view.state.doc !== document || searchQuery !== query) return;
+      searchPending = false;
+      searchMatches = matches;
+      if (anchor !== null) {
+        activeMatchIndex = firstMatchIndexAtOrAfter(anchor);
+        if (matches.length) selectActiveMatch('replace');
+        else {
+          updateSearchDecorations();
+          void tick().then(() => replaceInput?.focus());
+        }
+      } else refreshSearchState(options);
+    };
+    if (document.length <= 64 * 1024 || !query.trim()) {
+      complete(findEditorSearchMatches(document, query));
+    } else {
+      searchPending = true;
+      searchMatches = [];
+      updateSearchDecorations();
+      cancelSearch = startEditorSearch(document, query, complete);
+    }
   }
 
   function refreshSearchState(options: { keepActiveNearSelection?: boolean; selectActive?: boolean } = {}) {
@@ -736,16 +777,20 @@
     view.focus();
   }
 
-  function insertBlock(block: string) {
+  function insertBlock(block: string, editRange?: (block: string) => { from: number; to: number }) {
     if (!view) return;
     const selection = view.state.selection.main;
     const before = selection.from > 0 ? '\n\n' : '';
     const after = selection.to < view.state.doc.length ? '\n\n' : '';
     const insert = `${before}${block}${after}`;
 
+    const selectionStart = selection.from + before.length;
+    const range = editRange?.(block);
     view.dispatch({
       changes: { from: selection.from, to: selection.to, insert },
-      selection: EditorSelection.cursor(selection.from + before.length + block.length),
+      selection: range
+        ? EditorSelection.range(selectionStart + range.from, selectionStart + range.to)
+        : EditorSelection.cursor(selectionStart + block.length),
       annotations: isolateHistory.of('full')
     });
     view.focus();
@@ -784,7 +829,7 @@
           </span>
         </button>
 
-        <label class="find-input-shell" aria-label={$translator('editor.find.search')}>
+        <label class="find-input-shell" aria-label={$translator('editor.find.search')} aria-busy={searchPending}>
           <Search size={15} />
           <input
             bind:this={searchInput}

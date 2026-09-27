@@ -1,0 +1,3 @@
+[default]
+description = "Allow the Android open-request notification listener; storage calls stay behind Rust commands."
+permissions = ["allow-register-listener", "allow-remove-listener"]

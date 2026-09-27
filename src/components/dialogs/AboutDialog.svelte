@@ -7,6 +7,8 @@
   export let onExportDiagnostics: () => void;
   export let onClearDiagnostics: () => void;
   export let onOpenRepository: (url: string) => void;
+  export let onCheckUpdates: () => void = () => {};
+  export let desktopUpdates = false;
 
   const repositoryUrl = 'https://github.com/Vazone/Marklite';
 </script>
@@ -36,6 +38,11 @@
         <span>CodeMirror 6</span>
         <span>Svelte 5</span>
       </div>
+      {#if desktopUpdates}
+        <div class="about-diagnostics">
+          <button type="button" class="ghost-button" on:click={onCheckUpdates}>{$translator('update.checkNow')}</button>
+        </div>
+      {/if}
       <div class="about-diagnostics" aria-label={$translator('about.diagnostics')}>
         <p>{$translator('about.diagnosticsPrivacy')}</p>
         <div>

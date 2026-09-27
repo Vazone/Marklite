@@ -1,4 +1,8 @@
+#[path = "export_docx_writer/footnote_assets.rs"]
+mod footnote_assets;
 use super::export_progress::{ExportReporter, ExportStage};
+use crate::models::diagram_assets::RasterDiagram;
+use crate::models::markdown_event::Event;
 use std::{
     collections::HashMap,
     io::{Cursor, Read, Write},
@@ -10,9 +14,33 @@ use docx_rs::{
     PageMargin, PageOrientationType, Paragraph, Pic, Run, Shading, SpecialIndentType, Start, Table,
     TableCell, TableRow,
 };
-use pulldown_cmark::{Alignment, BlockQuoteKind, Event, HeadingLevel, Tag};
+use pulldown_cmark::{Alignment, BlockQuoteKind, HeadingLevel, Tag};
 use quick_xml::{events::Event as XmlEvent, Reader as XmlReader};
 use sha2::{Digest, Sha256};
+
+fn code_run(text: &str) -> Run {
+    let mut run = Run::new()
+        .fonts(docx_rs::RunFonts::new().ascii("Consolas"))
+        .shading(Shading::new().fill("F6F8FA"));
+    let mut start = 0;
+    for (at, ch) in text.char_indices() {
+        if ch == '\n' || ch == '\t' {
+            if at > start {
+                run = run.add_text(&text[start..at]);
+            }
+            run = if ch == '\n' {
+                run.add_break(BreakType::TextWrapping)
+            } else {
+                run.add_tab()
+            };
+            start = at + 1;
+        }
+    }
+    if start < text.len() {
+        run = run.add_text(&text[start..]);
+    }
+    run
+}
 
 use crate::{
     models::{
@@ -22,7 +50,6 @@ use crate::{
         },
     },
     services::{
-        diagram_export_service::RasterDiagram,
         export_resources::{ExportLink, ExportResourceResolver},
         export_semantic::{event_text, NodeId, SemanticDocument, SemanticNode},
         math_service,
@@ -34,26 +61,64 @@ const EMU_PER_TWIP: u32 = 635;
 
 #[derive(Default, Clone, Copy)]
 struct InlineStyle {
+    highlight: bool,
     bold: bool,
     italic: bool,
     strike: bool,
+    vertical: Option<docx_rs::VertAlignType>,
     code: bool,
     in_footnote: bool,
 }
 
+impl InlineStyle {
+    fn for_tag(mut self, tag: &Tag<'_>) -> Option<Self> {
+        match tag {
+            Tag::Strong => self.bold = true,
+            Tag::Emphasis => self.italic = true,
+            Tag::Strikethrough => self.strike = true,
+            Tag::Superscript => self.vertical = Some(docx_rs::VertAlignType::SuperScript),
+            Tag::Subscript => self.vertical = Some(docx_rs::VertAlignType::SubScript),
+            _ => return None,
+        }
+        Some(self)
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn render(
     request: &ExportRequest,
     document: &SemanticDocument,
     diagrams: &HashMap<String, RasterDiagram>,
     reporter: &ExportReporter,
 ) -> Result<(Vec<u8>, Vec<ExportWarning>), AppError> {
-    let mut context = DocxContext::new(request, document, diagrams);
+    let resources = ExportResourceResolver::new(
+        request.snapshot.source_path.as_deref(),
+        request.options.include_local_images,
+    );
+    render_with_resources(request, document, diagrams, reporter, resources)
+}
+
+pub(crate) fn render_with_resources(
+    request: &ExportRequest,
+    document: &SemanticDocument,
+    diagrams: &HashMap<String, RasterDiagram>,
+    reporter: &ExportReporter,
+    resources: ExportResourceResolver<'_>,
+) -> Result<(Vec<u8>, Vec<ExportWarning>), AppError> {
+    let mut context = DocxContext::new(request, document, diagrams, resources);
+    for warning in document.warnings() {
+        context.resources.warnings_mut().push(warning.clone());
+    }
     context.render_document(document);
     reporter.phase(ExportStage::Encoding);
     let mut bytes = Cursor::new(Vec::new());
-    context
-        .docx
-        .build()
+    let mut package = context.docx.build();
+    let footnote_rels = footnote_assets::pack(
+        &mut package,
+        context.footnote_images,
+        context.footnote_links,
+    );
+    package
         .pack(&mut bytes)
         .map_err(|error| AppError::new("DOCX_EXPORT_FAILED", format!("生成 DOCX 失败：{error}")))?;
     reporter.phase(ExportStage::Validating);
@@ -61,6 +126,7 @@ pub(crate) fn render(
         bytes.into_inner(),
         &context.math_replacements,
         &context.diagram_picture_alts,
+        footnote_rels.as_deref(),
     )?;
     Ok((bytes, context.resources.into_warnings()))
 }
@@ -72,6 +138,8 @@ struct DocxContext<'a> {
     resources: ExportResourceResolver<'a>,
     diagram_rasters: &'a HashMap<String, RasterDiagram>,
     diagram_picture_alts: Vec<DiagramPictureAlt>,
+    footnote_images: Vec<Pic>,
+    footnote_links: Vec<docx_rs::HyperlinkData>,
     footnotes: HashMap<String, Vec<NodeId>>,
     heading_bookmarks: HashMap<String, String>,
     next_bookmark_id: usize,
@@ -84,7 +152,8 @@ struct DocxContext<'a> {
 }
 
 struct DiagramPictureAlt {
-    relation_id: String,
+    bookmark_id: usize,
+    part: MathPart,
     description: String,
 }
 
@@ -215,6 +284,7 @@ enum DocxWork {
 
 fn is_docx_inline_node(node: &SemanticNode) -> bool {
     match node {
+        SemanticNode::Highlight { .. } => true,
         SemanticNode::Element { tag, .. } => matches!(
             tag,
             Tag::Emphasis
@@ -235,6 +305,7 @@ impl<'a> DocxContext<'a> {
         request: &'a ExportRequest,
         document: &'a SemanticDocument,
         diagrams: &'a HashMap<String, RasterDiagram>,
+        resources: ExportResourceResolver<'a>,
     ) -> Self {
         let footnotes = collect_footnotes(document);
         let layout = DocxPageLayout::from_request(request);
@@ -248,12 +319,11 @@ impl<'a> DocxContext<'a> {
             request,
             document,
             docx,
-            resources: ExportResourceResolver::new(
-                request.snapshot.source_path.as_deref(),
-                request.options.include_local_images,
-            ),
+            resources,
             diagram_rasters: diagrams,
             diagram_picture_alts: Vec::new(),
+            footnote_images: Vec::new(),
+            footnote_links: Vec::new(),
             footnotes,
             heading_bookmarks: collect_heading_bookmarks(document),
             next_bookmark_id: 1,
@@ -318,6 +388,30 @@ impl<'a> DocxContext<'a> {
             };
             pending.push(DocxWork::Nodes(nodes, index + 1, quote_depth, numbering));
             match self.document.node(node) {
+                SemanticNode::Event(Event::Toc(toc)) => {
+                    for heading in toc.headings() {
+                        let name = self
+                            .heading_bookmarks
+                            .get(&heading.slug)
+                            .expect("TOC headings originate from the same document");
+                        let paragraph = Paragraph::new()
+                            .indent(
+                                Some(i32::from(heading.level.saturating_sub(1)) * 360),
+                                None,
+                                None,
+                                None,
+                            )
+                            .add_hyperlink(
+                                Hyperlink::new(name.clone(), HyperlinkType::Anchor)
+                                    .add_run(Run::new().add_text(&heading.title)),
+                            );
+                        self.push_paragraph(paragraph);
+                    }
+                }
+                SemanticNode::Highlight { .. } => {
+                    let paragraph = self.inline_paragraph(&[node], InlineStyle::default());
+                    self.push_paragraph(paragraph);
+                }
                 SemanticNode::Element { tag, children } => match tag {
                     Tag::Paragraph => {
                         let mut paragraph = self.inline_paragraph(children, InlineStyle::default());
@@ -363,39 +457,52 @@ impl<'a> DocxContext<'a> {
                             numbering,
                         ));
                     }
-                    Tag::CodeBlock(_) => {
+                    Tag::CodeBlock(kind) => {
                         if let Some(source) = self.document.diagram_source(node) {
                             if let Some(raster) = self.diagram_rasters.get(&source.diagram_id) {
-                                let picture = Pic::new_with_dimensions(
-                                    raster.png.clone(),
-                                    raster.width,
-                                    raster.height,
+                                let paragraph = self.diagram_paragraph(
+                                    Paragraph::new(),
+                                    node,
+                                    raster,
+                                    MathPart::Document,
                                 );
-                                let picture = fit_docx_picture_to_content_box(
-                                    picture,
-                                    self.content_width_emu,
-                                    self.content_height_emu,
-                                );
-                                self.diagram_picture_alts.push(DiagramPictureAlt {
-                                    relation_id: picture.id.clone(),
-                                    description: format!(
-                                        "Mermaid 图表，源码字节 {}-{}",
-                                        source.source_start_byte, source.source_end_byte
-                                    ),
-                                });
-                                self.push_paragraph(
-                                    Paragraph::new().add_run(Run::new().add_image(picture)),
-                                );
+                                self.push_paragraph(paragraph);
                                 continue;
                             }
                         }
                         let text = self.document.plain_text(children);
-                        let paragraph = Paragraph::new().add_run(
-                            Run::new()
-                                .add_text(text)
-                                .fonts(docx_rs::RunFonts::new().ascii("Consolas"))
-                                .shading(Shading::new().fill("F6F8FA")),
-                        );
+                        let info = match kind {
+                            pulldown_cmark::CodeBlockKind::Fenced(info) => info.as_ref(),
+                            _ => "",
+                        };
+                        let tokens = match self.document.code_tokens(&text, info) {
+                            Ok(tokens) => tokens,
+                            Err(error) => {
+                                self.resources.warnings_mut().push(ExportWarning::new(
+                                    "CODE_HIGHLIGHT_FAILED",
+                                    error,
+                                    None,
+                                ));
+                                std::sync::Arc::from([])
+                            }
+                        };
+                        let run = code_run;
+                        let mut paragraph = Paragraph::new();
+                        let mut at = 0;
+                        for token in tokens.iter() {
+                            if token.start > at {
+                                paragraph = paragraph.add_run(run(&text[at..token.start]));
+                            }
+                            let mut colored = run(&text[token.start..token.end]);
+                            if let Some(color) = super::code_highlight::color(token.class) {
+                                colored = colored.color(color);
+                            }
+                            paragraph = paragraph.add_run(colored);
+                            at = token.end;
+                        }
+                        if at < text.len() {
+                            paragraph = paragraph.add_run(run(&text[at..]));
+                        }
                         self.push_paragraph(paragraph);
                     }
                     Tag::List(start) => {
@@ -643,6 +750,49 @@ impl<'a> DocxContext<'a> {
         self.docx = std::mem::take(&mut self.docx).add_table(Table::new(rows));
     }
 
+    fn diagram_paragraph(
+        &mut self,
+        paragraph: Paragraph,
+        node: NodeId,
+        raster: &RasterDiagram,
+        part: MathPart,
+    ) -> Paragraph {
+        let source = self.document.diagram_source(node).expect("diagram source");
+        let bookmark_id = self.next_bookmark_id;
+        self.next_bookmark_id += 1;
+        self.diagram_picture_alts.push(DiagramPictureAlt {
+            bookmark_id,
+            part,
+            description: format!(
+                "Mermaid 图表，源码字节 {}-{}",
+                source.source_start_byte, source.source_end_byte
+            ),
+        });
+        let picture = fit_docx_picture_to_content_box(
+            Pic::new_with_dimensions(raster.png.clone(), raster.width, raster.height),
+            self.content_width_emu,
+            self.content_height_emu,
+        );
+        let picture = self.register_picture(picture, part);
+        // A bookmark identifies this occurrence; docx-rs may rewrite the media relationship.
+        paragraph
+            .add_bookmark_start(bookmark_id, format!("_marklite_diagram_{bookmark_id}"))
+            .add_run(Run::new().add_image(picture))
+            .add_bookmark_end(bookmark_id)
+    }
+
+    fn register_picture(&mut self, mut picture: Pic, part: MathPart) -> Pic {
+        if part == MathPart::Footnotes {
+            // docx-rs does not collect media nested inside footnote references.
+            // Keep geometry in the drawing and transfer its bytes to package assembly.
+            let bytes = std::mem::take(&mut picture.image);
+            let mut asset = picture.clone();
+            asset.image = bytes;
+            self.footnote_images.push(asset);
+        }
+        picture
+    }
+
     fn inline_paragraph(&mut self, nodes: &[NodeId], style: InlineStyle) -> Paragraph {
         let mut paragraph = Paragraph::new();
         for node in nodes.iter().copied() {
@@ -653,30 +803,36 @@ impl<'a> DocxContext<'a> {
 
     fn add_inline(&mut self, paragraph: Paragraph, node: NodeId, style: InlineStyle) -> Paragraph {
         match self.document.node(node) {
+            SemanticNode::Highlight { children } => self.add_inline_children(
+                paragraph,
+                children,
+                InlineStyle {
+                    highlight: true,
+                    ..style
+                },
+            ),
             SemanticNode::Element { tag, children } => match tag {
-                Tag::Strong => self.add_inline_children(
+                Tag::CodeBlock(_) if self.document.diagram_source(node).is_some() => {
+                    let source = self.document.diagram_source(node).expect("diagram source");
+                    if let Some(raster) = self.diagram_rasters.get(&source.diagram_id) {
+                        self.diagram_paragraph(
+                            paragraph,
+                            node,
+                            raster,
+                            if style.in_footnote {
+                                MathPart::Footnotes
+                            } else {
+                                MathPart::Document
+                            },
+                        )
+                    } else {
+                        self.add_inline_children(paragraph, children, style)
+                    }
+                }
+                tag if style.for_tag(tag).is_some() => self.add_inline_children(
                     paragraph,
                     children,
-                    InlineStyle {
-                        bold: true,
-                        ..style
-                    },
-                ),
-                Tag::Emphasis => self.add_inline_children(
-                    paragraph,
-                    children,
-                    InlineStyle {
-                        italic: true,
-                        ..style
-                    },
-                ),
-                Tag::Strikethrough => self.add_inline_children(
-                    paragraph,
-                    children,
-                    InlineStyle {
-                        strike: true,
-                        ..style
-                    },
+                    style.for_tag(tag).expect("style tag was recognized"),
                 ),
                 Tag::Link { .. } => {
                     let resolved = self
@@ -706,24 +862,16 @@ impl<'a> DocxContext<'a> {
                                     (HyperlinkType::External, format!("mailto:{address}"))
                                 }
                             };
-                            if style.in_footnote {
-                                self.resources.warnings_mut().push(ExportWarning::new(
-                                    "DOCX_FOOTNOTE_LINK_DEGRADED",
-                                    "DOCX 脚注中的链接已保留标签和目标文本",
-                                    Some(value.clone()),
-                                ));
-                                let paragraph =
-                                    self.add_inline_children(paragraph, children, style);
-                                return paragraph.add_run(styled_run(
-                                    Run::new().add_text(format!(" ({value})")),
-                                    style,
-                                ));
-                            }
                             let hyperlink = self.add_hyperlink_children(
                                 Hyperlink::new(value, kind),
                                 children,
                                 style,
                             );
+                            if style.in_footnote
+                                && matches!(hyperlink.link, docx_rs::HyperlinkData::External { .. })
+                            {
+                                self.footnote_links.push(hyperlink.link.clone());
+                            }
                             paragraph.add_hyperlink(hyperlink)
                         }
                         Err(warning) => {
@@ -748,7 +896,15 @@ impl<'a> DocxContext<'a> {
                                 _ => Err(path.to_string()),
                             });
                     match prepared_image {
-                        Some(Ok(image)) => paragraph.add_run(Run::new().add_image(image)),
+                        Some(Ok(image)) => {
+                            let part = if style.in_footnote {
+                                MathPart::Footnotes
+                            } else {
+                                MathPart::Document
+                            };
+                            let image = self.register_picture(image, part);
+                            paragraph.add_run(Run::new().add_image(image))
+                        }
                         Some(Err(path)) => {
                             self.resources.warnings_mut().push(ExportWarning::new(
                                 "DOCX_IMAGE_FORMAT_DEGRADED",
@@ -854,7 +1010,13 @@ impl<'a> DocxContext<'a> {
                 paragraph.add_run(styled_run(Run::new().add_text(value.as_ref()), style))
             }
             SemanticNode::Event(Event::Rule) => paragraph.add_run(Run::new().add_text("────────")),
-            SemanticNode::Event(Event::Start(_) | Event::End(_)) => paragraph,
+            SemanticNode::Event(
+                Event::Start(_)
+                | Event::End(_)
+                | Event::StartHighlight
+                | Event::EndHighlight
+                | Event::Toc(_),
+            ) => paragraph,
         }
     }
 
@@ -872,42 +1034,17 @@ impl<'a> DocxContext<'a> {
             .collect::<Vec<_>>();
         while let Some((node, style)) = pending.pop() {
             match self.document.node(node) {
-                SemanticNode::Element {
-                    tag: Tag::Strong,
-                    children,
-                } => pending.extend(children.iter().rev().copied().map(|node| {
-                    (
-                        node,
-                        InlineStyle {
-                            bold: true,
-                            ..style
-                        },
-                    )
-                })),
-                SemanticNode::Element {
-                    tag: Tag::Emphasis,
-                    children,
-                } => pending.extend(children.iter().rev().copied().map(|node| {
-                    (
-                        node,
-                        InlineStyle {
-                            italic: true,
-                            ..style
-                        },
-                    )
-                })),
-                SemanticNode::Element {
-                    tag: Tag::Strikethrough,
-                    children,
-                } => pending.extend(children.iter().rev().copied().map(|node| {
-                    (
-                        node,
-                        InlineStyle {
-                            strike: true,
-                            ..style
-                        },
-                    )
-                })),
+                SemanticNode::Highlight { children } => {
+                    let nested = InlineStyle {
+                        highlight: true,
+                        ..style
+                    };
+                    pending.extend(children.iter().rev().copied().map(|node| (node, nested)));
+                }
+                SemanticNode::Element { tag, children } if style.for_tag(tag).is_some() => {
+                    let nested = style.for_tag(tag).expect("style tag was recognized");
+                    pending.extend(children.iter().rev().copied().map(|node| (node, nested)));
+                }
                 _ => paragraph = self.add_inline(paragraph, node, style),
             }
         }
@@ -928,42 +1065,17 @@ impl<'a> DocxContext<'a> {
             .collect::<Vec<_>>();
         while let Some((node, style)) = pending.pop() {
             match self.document.node(node) {
-                SemanticNode::Element {
-                    tag: Tag::Strong,
-                    children,
-                } => pending.extend(children.iter().rev().copied().map(|node| {
-                    (
-                        node,
-                        InlineStyle {
-                            bold: true,
-                            ..style
-                        },
-                    )
-                })),
-                SemanticNode::Element {
-                    tag: Tag::Emphasis,
-                    children,
-                } => pending.extend(children.iter().rev().copied().map(|node| {
-                    (
-                        node,
-                        InlineStyle {
-                            italic: true,
-                            ..style
-                        },
-                    )
-                })),
-                SemanticNode::Element {
-                    tag: Tag::Strikethrough,
-                    children,
-                } => pending.extend(children.iter().rev().copied().map(|node| {
-                    (
-                        node,
-                        InlineStyle {
-                            strike: true,
-                            ..style
-                        },
-                    )
-                })),
+                SemanticNode::Highlight { children } => {
+                    let nested = InlineStyle {
+                        highlight: true,
+                        ..style
+                    };
+                    pending.extend(children.iter().rev().copied().map(|node| (node, nested)));
+                }
+                SemanticNode::Element { tag, children } if style.for_tag(tag).is_some() => {
+                    let nested = style.for_tag(tag).expect("style tag was recognized");
+                    pending.extend(children.iter().rev().copied().map(|node| (node, nested)));
+                }
                 SemanticNode::Element { children, .. } => {
                     pending.extend(children.iter().rev().copied().map(|node| (node, style)))
                 }
@@ -1027,7 +1139,7 @@ fn semantic_contains(document: &SemanticDocument, needle: &str) -> bool {
     let mut pending = document.roots().iter().rev().copied().collect::<Vec<_>>();
     while let Some(id) = pending.pop() {
         match document.node(id) {
-            SemanticNode::Element { children, .. } => {
+            SemanticNode::Element { children, .. } | SemanticNode::Highlight { children } => {
                 pending.extend(children.iter().rev().copied());
             }
             SemanticNode::Event(event) if event_text(event).contains(needle) => return true,
@@ -1041,8 +1153,9 @@ fn inject_omml(
     bytes: Vec<u8>,
     replacements: &[MathReplacement],
     diagrams: &[DiagramPictureAlt],
+    footnote_rels: Option<&str>,
 ) -> Result<Vec<u8>, AppError> {
-    if replacements.is_empty() && diagrams.is_empty() {
+    if replacements.is_empty() && diagrams.is_empty() && footnote_rels.is_none() {
         return Ok(bytes);
     }
     let mut source = ZipArchive::new(Cursor::new(bytes)).map_err(docx_postprocess_error)?;
@@ -1050,6 +1163,17 @@ fn inject_omml(
     let mut seen_parts = [false; 2];
     {
         let mut destination = ZipWriter::new(&mut output);
+        if let Some(rels) = footnote_rels {
+            destination
+                .start_file(
+                    "word/_rels/footnotes.xml.rels",
+                    SimpleFileOptions::default(),
+                )
+                .map_err(docx_postprocess_error)?;
+            destination
+                .write_all(rels.as_bytes())
+                .map_err(docx_postprocess_error)?;
+        }
         for index in 0..source.len() {
             let mut entry = source.by_index(index).map_err(docx_postprocess_error)?;
             let part = match entry.name() {
@@ -1066,7 +1190,11 @@ fn inject_omml(
                 .iter()
                 .filter(|replacement| replacement.part == part)
                 .collect::<Vec<_>>();
-            if part_replacements.is_empty() && (part != MathPart::Document || diagrams.is_empty()) {
+            let part_diagrams = diagrams
+                .iter()
+                .filter(|diagram| diagram.part == part)
+                .collect::<Vec<_>>();
+            if part_replacements.is_empty() && part_diagrams.is_empty() {
                 destination
                     .raw_copy_file(entry)
                     .map_err(docx_postprocess_error)?;
@@ -1079,12 +1207,10 @@ fn inject_omml(
             entry
                 .read_to_string(&mut part_xml)
                 .map_err(docx_postprocess_error)?;
+            drop(entry);
+
             let part_xml = rewrite_math_part(&part_xml, part, &part_replacements)?;
-            let part_xml = if part == MathPart::Document {
-                rewrite_diagram_alt(&part_xml, diagrams)?
-            } else {
-                part_xml
-            };
+            let part_xml = rewrite_diagram_alt(&part_xml, &part_diagrams)?;
             destination
                 .start_file(name, options)
                 .map_err(docx_postprocess_error)?;
@@ -1095,9 +1221,10 @@ fn inject_omml(
         destination.finish().map_err(docx_postprocess_error)?;
     }
     for part in [MathPart::Document, MathPart::Footnotes] {
-        if replacements
+        if (replacements
             .iter()
             .any(|replacement| replacement.part == part)
+            || diagrams.iter().any(|diagram| diagram.part == part))
             && !seen_parts[usize::from(part == MathPart::Footnotes)]
         {
             return Err(docx_postprocess_error(format!(
@@ -1106,17 +1233,124 @@ fn inject_omml(
             )));
         }
     }
-    Ok(output.into_inner())
+    let bytes = output.into_inner();
+    let mut archive = ZipArchive::new(Cursor::new(bytes)).map_err(docx_postprocess_error)?;
+    for part in [MathPart::Document, MathPart::Footnotes] {
+        if diagrams.iter().any(|diagram| diagram.part == part)
+            || (part == MathPart::Footnotes && footnote_rels.is_some())
+        {
+            let mut xml = String::new();
+            archive
+                .by_name(part.zip_name())
+                .map_err(docx_postprocess_error)?
+                .read_to_string(&mut xml)
+                .map_err(docx_postprocess_error)?;
+            validate_image_relations(&mut archive, &xml, part)?;
+        }
+    }
+    Ok(archive.into_inner().into_inner())
 }
 
-fn rewrite_diagram_alt(xml: &str, diagrams: &[DiagramPictureAlt]) -> Result<String, AppError> {
+fn validate_image_relations(
+    archive: &mut ZipArchive<Cursor<Vec<u8>>>,
+    xml: &str,
+    part: MathPart,
+) -> Result<(), AppError> {
+    let name = part.zip_name().strip_prefix("word/").expect("word part");
+    let mut relationships = String::new();
+    archive
+        .by_name(&format!("word/_rels/{name}.rels"))
+        .map_err(docx_postprocess_error)?
+        .read_to_string(&mut relationships)
+        .map_err(docx_postprocess_error)?;
+    let mut images = HashMap::new();
+    let mut reader = XmlReader::from_str(&relationships);
+    loop {
+        match reader.read_event().map_err(docx_postprocess_error)? {
+            XmlEvent::Empty(event) if event.name().as_ref() == b"Relationship" => {
+                let mut id = None;
+                let mut target = None;
+                let mut image = false;
+                let mut external = false;
+                for attribute in event.attributes() {
+                    let attribute = attribute.map_err(docx_postprocess_error)?;
+                    let value = attribute
+                        .decoded_and_normalized_value(
+                            quick_xml::XmlVersion::Implicit1_0,
+                            reader.decoder(),
+                        )
+                        .map_err(docx_postprocess_error)?
+                        .into_owned();
+                    match attribute.key.as_ref() {
+                        b"Id" => id = Some(value),
+                        b"Target" => target = Some(value),
+                        b"Type" => image = value == "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+                        b"TargetMode" => external = value == "External",
+                        _ => {}
+                    }
+                }
+                if image {
+                    let id =
+                        id.ok_or_else(|| docx_postprocess_error("image relationship missing ID"))?;
+                    let target = target.ok_or_else(|| {
+                        docx_postprocess_error("image relationship missing target")
+                    })?;
+                    // Writer-generated image relationships are local media, never remote URLs.
+                    if external
+                        || !target.starts_with("media/")
+                        || target.contains("..")
+                        || target.contains('\\')
+                    {
+                        return Err(docx_postprocess_error("invalid image relationship target"));
+                    }
+                    archive
+                        .by_name(&format!("word/{target}"))
+                        .map_err(docx_postprocess_error)?;
+                    if images.insert(id, target).is_some() {
+                        return Err(docx_postprocess_error("duplicate image relationship ID"));
+                    }
+                }
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+    }
+    let mut reader = XmlReader::from_str(xml);
+    loop {
+        match reader.read_event().map_err(docx_postprocess_error)? {
+            XmlEvent::Empty(event) if event.name().as_ref() == b"a:blip" => {
+                for attribute in event.attributes() {
+                    let attribute = attribute.map_err(docx_postprocess_error)?;
+                    if attribute.key.as_ref() == b"r:embed" {
+                        let id = attribute
+                            .decoded_and_normalized_value(
+                                quick_xml::XmlVersion::Implicit1_0,
+                                reader.decoder(),
+                            )
+                            .map_err(docx_postprocess_error)?;
+                        if !images.contains_key(id.as_ref()) {
+                            return Err(docx_postprocess_error(
+                                "image references missing relationship",
+                            ));
+                        }
+                    }
+                }
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn rewrite_diagram_alt(xml: &str, diagrams: &[&DiagramPictureAlt]) -> Result<String, AppError> {
     if diagrams.is_empty() {
         return Ok(xml.to_string());
     }
     let lookup = diagrams
         .iter()
         .enumerate()
-        .map(|(index, diagram)| (diagram.relation_id.as_bytes(), index))
+        .map(|(index, diagram)| (diagram.bookmark_id.to_string(), index))
         .collect::<HashMap<_, _>>();
     let mut seen = vec![0usize; diagrams.len()];
     let mut spans = Vec::new();
@@ -1124,16 +1358,50 @@ fn rewrite_diagram_alt(xml: &str, diagrams: &[DiagramPictureAlt]) -> Result<Stri
     let mut drawing = false;
     let mut doc_pr = None;
     let mut diagram_index = None;
+    let mut embed = false;
     loop {
         let start = reader.buffer_position() as usize;
         match reader.read_event().map_err(docx_postprocess_error)? {
+            XmlEvent::Empty(event) if event.name().as_ref() == b"w:bookmarkStart" => {
+                for attribute in event.attributes() {
+                    let attribute = attribute.map_err(docx_postprocess_error)?;
+                    if attribute.key.as_ref() == b"w:id" {
+                        let id = std::str::from_utf8(attribute.value.as_ref())
+                            .map_err(docx_postprocess_error)?;
+                        if let Some(&index) = lookup.get(id) {
+                            if diagram_index.replace(index).is_some() {
+                                return Err(docx_postprocess_error(
+                                    "overlapping diagram bookmarks",
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            XmlEvent::Empty(event) if event.name().as_ref() == b"w:bookmarkEnd" => {
+                for attribute in event.attributes() {
+                    let attribute = attribute.map_err(docx_postprocess_error)?;
+                    if attribute.key.as_ref() == b"w:id" {
+                        let id = std::str::from_utf8(attribute.value.as_ref())
+                            .map_err(docx_postprocess_error)?;
+                        if let Some(&index) = lookup.get(id) {
+                            if diagram_index != Some(index) || drawing || seen[index] != 1 {
+                                return Err(docx_postprocess_error(
+                                    "invalid diagram bookmark range",
+                                ));
+                            }
+                            diagram_index = None;
+                        }
+                    }
+                }
+            }
             XmlEvent::Start(event) if event.name().as_ref() == b"w:drawing" => {
                 if drawing {
                     return Err(docx_postprocess_error("nested DOCX image drawing"));
                 }
                 drawing = true;
                 doc_pr = None;
-                diagram_index = None;
+                embed = false;
             }
             XmlEvent::Empty(event) if drawing && event.name().as_ref() == b"wp:docPr" => {
                 if doc_pr
@@ -1147,18 +1415,20 @@ fn rewrite_diagram_alt(xml: &str, diagrams: &[DiagramPictureAlt]) -> Result<Stri
                 for attribute in event.attributes() {
                     let attribute = attribute.map_err(docx_postprocess_error)?;
                     if attribute.key.as_ref() == b"r:embed" {
-                        if let Some(&index) = lookup.get::<[u8]>(attribute.value.as_ref()) {
-                            if diagram_index.replace(index).is_some() {
-                                return Err(docx_postprocess_error(
-                                    "duplicate diagram image in drawing",
-                                ));
-                            }
+                        if embed || attribute.value.is_empty() {
+                            return Err(docx_postprocess_error(
+                                "invalid diagram image relationship",
+                            ));
                         }
+                        embed = true;
                     }
                 }
             }
             XmlEvent::End(event) if event.name().as_ref() == b"w:drawing" => {
                 if let Some(index) = diagram_index {
+                    if !embed {
+                        return Err(docx_postprocess_error("diagram image relationship missing"));
+                    }
                     let (start, end) = doc_pr.ok_or_else(|| {
                         docx_postprocess_error("diagram image has no description slot")
                     })?;
@@ -1171,7 +1441,7 @@ fn rewrite_diagram_alt(xml: &str, diagrams: &[DiagramPictureAlt]) -> Result<Stri
             _ => {}
         }
     }
-    if seen.iter().any(|count| *count != 1) {
+    if drawing || diagram_index.is_some() || seen.iter().any(|count| *count != 1) {
         return Err(docx_postprocess_error(
             "diagram image relationship is missing or duplicated",
         ));
@@ -1275,6 +1545,9 @@ fn docx_postprocess_error(error: impl std::fmt::Display) -> AppError {
 }
 
 fn styled_run(mut run: Run, style: InlineStyle) -> Run {
+    if style.highlight {
+        run = run.highlight("yellow");
+    }
     if style.bold {
         run = run.bold();
     }
@@ -1283,6 +1556,9 @@ fn styled_run(mut run: Run, style: InlineStyle) -> Run {
     }
     if style.strike {
         run = run.strike();
+    }
+    if let Some(vertical) = style.vertical {
+        run.run_property = run.run_property.vert_align(vertical);
     }
     if style.code {
         run = run.fonts(docx_rs::RunFonts::new().ascii("Consolas"));
@@ -1422,4 +1698,199 @@ fn collect_table_rows(document: &SemanticDocument, nodes: &[NodeId]) -> Vec<Vec<
         }
     }
     rows
+}
+
+#[cfg(test)]
+mod diagram_tests {
+    use super::*;
+
+    #[test]
+    fn docx_semantic_scripts_preserve_bold_and_hyperlink_run_styles() {
+        use crate::models::export::{ExportFormat, ExportOptions, ExportSnapshot};
+        let content = "**x** [linked](https://example.com)";
+        let mut document = SemanticDocument::parse(content, None);
+        let SemanticNode::Element { children, .. } = document.node(document.roots()[0]) else {
+            panic!("fixture starts with a paragraph")
+        };
+        let children = children.clone();
+        let sup = document.append_fragment_node(SemanticNode::Element {
+            tag: Tag::Superscript,
+            children: children.clone(),
+        });
+        let sub = document.append_fragment_node(SemanticNode::Element {
+            tag: Tag::Subscript,
+            children,
+        });
+        let paragraph = document.append_fragment_node(SemanticNode::Element {
+            tag: Tag::Paragraph,
+            children: vec![sup, sub],
+        });
+        document.replace_roots(vec![paragraph]);
+        let request = ExportRequest {
+            snapshot: ExportSnapshot {
+                job_id: "script-style".into(),
+                tab_id: "test".into(),
+                content_revision: 1,
+                source_path: None,
+                title: "Scripts".into(),
+                content: content.into(),
+            },
+            target_path: "unused.docx".into(),
+            target_kind: Default::default(),
+            format: ExportFormat::Docx,
+            options: ExportOptions {
+                paper_size: ExportPaperSize::A4,
+                orientation: ExportOrientation::Portrait,
+                margin: ExportMarginPreset::Normal,
+                include_title: false,
+                include_local_images: false,
+            },
+            mind_map_svg: None,
+        };
+        let (bytes, warnings) = render(
+            &request,
+            &document,
+            &HashMap::new(),
+            &ExportReporter::silent("script-style", ExportFormat::Docx),
+        )
+        .unwrap();
+        assert!(warnings.is_empty());
+        let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("word/document.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+        assert!(xml.contains("w:val=\"superscript\""), "{xml}");
+        assert!(xml.contains("w:val=\"subscript\""), "{xml}");
+        for link in xml.split("<w:hyperlink").skip(1) {
+            let body = link.split("</w:hyperlink>").next().unwrap();
+            assert!(body.contains("<w:vertAlign"), "{body}");
+        }
+        assert_eq!(xml.matches("<w:hyperlink").count(), 2);
+        assert!(xml.contains("<w:b"));
+    }
+
+    fn diagram() -> DiagramPictureAlt {
+        DiagramPictureAlt {
+            bookmark_id: 7,
+            part: MathPart::Document,
+            description: "A & B".into(),
+        }
+    }
+
+    #[test]
+    fn docx_table_diagram_instances_keep_descriptions_with_shared_media() {
+        let mut docx = Docx::new();
+        let diagrams = (1..=2)
+            .map(|id| DiagramPictureAlt {
+                bookmark_id: id,
+                part: MathPart::Document,
+                description: format!("table diagram {id}"),
+            })
+            .collect::<Vec<_>>();
+        let cells = diagrams
+            .iter()
+            .map(|diagram| {
+                TableCell::new().add_paragraph(
+                    Paragraph::new()
+                        .add_bookmark_start(
+                            diagram.bookmark_id,
+                            format!("diagram{}", diagram.bookmark_id),
+                        )
+                        .add_run(Run::new().add_image(Pic::new_with_dimensions(
+                            vec![1, 2, 3],
+                            1,
+                            1,
+                        )))
+                        .add_bookmark_end(diagram.bookmark_id),
+                )
+            })
+            .collect();
+        docx = docx.add_table(Table::new(vec![TableRow::new(cells)]));
+        let mut bytes = Cursor::new(Vec::new());
+        docx.build().pack(&mut bytes).unwrap();
+        let bytes = inject_omml(bytes.into_inner(), &[], &diagrams, None).unwrap();
+        let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("word/document.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+        assert!(xml.contains("descr=\"table diagram 1\""));
+        assert!(xml.contains("descr=\"table diagram 2\""));
+        assert_eq!(
+            archive
+                .file_names()
+                .filter(|name| name.starts_with("word/media/") && !name.ends_with('/'))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn docx_image_relations_reject_missing_media_and_broken_targets() {
+        let relation = r#"<Relationship Id="image1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>"#;
+        for (relationships, media, embed, valid) in [
+            (relation.to_string(), true, "image1", true),
+            (relation.to_string(), false, "image1", false),
+            (relation.to_string(), true, "missing", false),
+            (relation.repeat(2), true, "image1", false),
+            (
+                relation.replace("media/image1.png", "../image1.png"),
+                true,
+                "image1",
+                false,
+            ),
+            (
+                relation.replace("/>", " TargetMode=\"External\"/>"),
+                true,
+                "image1",
+                false,
+            ),
+        ] {
+            let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+            writer
+                .start_file("word/_rels/document.xml.rels", SimpleFileOptions::default())
+                .unwrap();
+            write!(writer, "<Relationships>{relationships}</Relationships>").unwrap();
+            if media {
+                writer
+                    .start_file("word/media/image1.png", SimpleFileOptions::default())
+                    .unwrap();
+                writer.write_all(b"image bytes").unwrap();
+            }
+            let mut archive = ZipArchive::new(writer.finish().unwrap()).unwrap();
+            let xml = format!(r#"<a:blip r:embed="{embed}"/>"#);
+            assert_eq!(
+                validate_image_relations(&mut archive, &xml, MathPart::Document).is_ok(),
+                valid
+            );
+        }
+    }
+
+    #[test]
+    fn docx_diagram_slots_reject_missing_duplicate_and_malformed_drawings() {
+        let diagram = diagram();
+        let drawing = r#"<w:drawing><wp:docPr id="1"/><a:blip r:embed="rIdImage1"/></w:drawing>"#;
+        let range = format!(r#"<w:bookmarkStart w:id="7"/>{drawing}<w:bookmarkEnd w:id="7"/>"#);
+        let rewritten = rewrite_diagram_alt(&range, &[&diagram]).unwrap();
+        assert!(rewritten.contains("descr=\"A &amp; B\""));
+        for invalid in [
+            drawing.to_string(),
+            range.repeat(2),
+            range.replace(drawing, ""),
+            range.replace(drawing, &drawing.repeat(2)),
+            range.replace("r:embed=\"rIdImage1\"", ""),
+            range.replace("<wp:docPr id=\"1\"/>", ""),
+            range.replace("<w:bookmarkEnd w:id=\"7\"/>", ""),
+        ] {
+            assert!(
+                rewrite_diagram_alt(&invalid, &[&diagram]).is_err(),
+                "{invalid}"
+            );
+        }
+    }
 }

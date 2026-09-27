@@ -1,0 +1,21 @@
+{
+  "root": {
+    "rootId": "workspace-1",
+    "resource": { "kind": "desktopDirectory", "path": "C:\\notes" },
+    "name": "notes"
+  },
+  "page": {
+    "rootId": "workspace-1",
+    "relativePath": "",
+    "generation": 2,
+    "entries": [
+      { "name": "chapter", "relativePath": "chapter", "kind": "directory", "resource": { "kind": "desktopDirectory", "path": "C:\\notes\\chapter" }, "size": null, "issue": null },
+      { "name": "a.md", "relativePath": "a.md", "kind": "markdown", "resource": { "kind": "desktopFile", "path": "C:\\notes\\a.md" }, "size": 123, "issue": null },
+      { "name": "link", "relativePath": "link", "kind": "unavailable", "resource": null, "size": null, "issue": { "code": "WORKSPACE_LINK_UNSUPPORTED", "message": "Link not followed" } }
+    ],
+    "next": { "generation": 2, "offset": 3 },
+    "watchIssue": null
+  },
+  "invalidation": { "rootId": "workspace-1", "directories": [{ "relativePath": "", "generation": 3 }], "overflow": true },
+  "failure": { "code": "WORKSPACE_PERMISSION_DENIED", "message": "Directory access denied" }
+}

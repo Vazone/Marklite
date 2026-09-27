@@ -1,9 +1,11 @@
 import type { DocumentDto, DocumentOperationDto, FileVersionDto } from './tauriApi';
-import { isSameFileIdentity, isSameFilePath } from './filePathIdentity';
+import { isSameFileIdentity } from './filePathIdentity';
+import { isSameResource, type ResourceRef } from './platform/resources';
 
 export type SaveableTabSnapshot = {
   id: string;
   path: string | null;
+  resource: ResourceRef | null;
   fileIdentity: string | null;
   contentVersion: string | null;
   loadState: 'loaded' | 'unloaded' | 'loading' | 'error';
@@ -18,11 +20,11 @@ export type FileOwner = {
 
 export type DocumentSaveDependencies = {
   getTab: (tabId: string) => SaveableTabSnapshot | undefined;
-  resolveFileVersion: (path: string, allowMissing: boolean) => Promise<FileVersionDto | null>;
+  resolveFileVersion: (resource: ResourceRef, allowMissing: boolean) => Promise<FileVersionDto | null>;
   getFileOwner: (fileIdentity: string, excludingTabId: string) => FileOwner | undefined;
   activateTab: (tabId: string) => void;
   saveFile: (
-    path: string,
+    resource: ResourceRef,
     content: string,
     expectedFileIdentity: string | null,
     expectedContentVersion: string | null,
@@ -43,18 +45,18 @@ function saveError(code: string, message: string): Error & { code: string } {
  */
 export async function saveDocumentSnapshot(
   tabId: string,
-  path: string,
+  resource: ResourceRef,
   dependencies: DocumentSaveDependencies,
   overwriteExternalChanges = false
 ): Promise<DocumentOperationDto | null> {
   const tab = dependencies.getTab(tabId);
   if (!tab || tab.loadState !== 'loaded') return null;
 
-  const observedVersion = await dependencies.resolveFileVersion(path, true);
+  const observedVersion = await dependencies.resolveFileVersion(resource, true);
   const observedFileIdentity = observedVersion?.fileIdentity ?? null;
-  const targetsOriginalPath = isSameFilePath(tab.path, path);
+  const targetsOriginalResource = isSameResource(tab.resource, resource);
   if (
-    targetsOriginalPath &&
+    targetsOriginalResource &&
     tab.fileIdentity &&
     !overwriteExternalChanges &&
     !isSameFileIdentity(tab.fileIdentity, observedFileIdentity)
@@ -75,14 +77,14 @@ export async function saveDocumentSnapshot(
     }
   }
 
-  const expectedFileIdentity = targetsOriginalPath && !overwriteExternalChanges
+  const expectedFileIdentity = targetsOriginalResource && !overwriteExternalChanges
     ? tab.fileIdentity
     : observedFileIdentity;
-  const expectedContentVersion = targetsOriginalPath && !overwriteExternalChanges
+  const expectedContentVersion = targetsOriginalResource && !overwriteExternalChanges
     ? tab.contentVersion
     : observedVersion?.contentVersion ?? null;
   const result = await dependencies.saveFile(
-    path,
+    resource,
     tab.content,
     expectedFileIdentity,
     expectedContentVersion,

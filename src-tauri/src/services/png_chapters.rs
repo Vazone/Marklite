@@ -1,6 +1,7 @@
+use crate::models::markdown_event::Event;
 use std::collections::{HashMap, HashSet};
 
-use pulldown_cmark::{Event, HeadingLevel, Tag};
+use pulldown_cmark::{HeadingLevel, Tag};
 
 use crate::{
     models::app_error::AppError,
@@ -99,6 +100,9 @@ pub(crate) fn plan(document: &SemanticDocument) -> Result<Vec<Chapter>, AppError
             while let Some(id) = pending.pop() {
                 nodes += 1;
                 match document.node(id) {
+                    SemanticNode::Highlight { children } => {
+                        pending.extend(children.iter().rev().copied())
+                    }
                     SemanticNode::Element { tag, children } => {
                         if let Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. } = tag {
                             bytes += dest_url.len();

@@ -27,6 +27,13 @@ struct FixtureArtifact {
     view_box: [f64; 4],
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Fixture {
+    id: String,
+    source: String,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = PathBuf::from(
         env::args_os()
@@ -34,15 +41,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("missing fixture artifact path")?,
     );
     let artifacts: Vec<FixtureArtifact> = serde_json::from_slice(&fs::read(path)?)?;
-    if artifacts.len() != 27 {
+    let fixtures: Vec<Fixture> =
+        serde_json::from_str(include_str!("../../../src/shared/mermaid-fixtures.json"))?;
+    let count = fixtures.len();
+    if artifacts.len() != count {
         return Err(format!(
-            "expected 27 fixture artifacts, received {}",
+            "expected {count} fixture artifacts, received {}",
             artifacts.len()
         )
         .into());
     }
     let mut total_svg_bytes = 0usize;
-    for (ordinal, artifact) in artifacts.into_iter().enumerate() {
+    for (ordinal, (artifact, fixture)) in artifacts.into_iter().zip(fixtures).enumerate() {
+        if artifact.id != fixture.id || artifact.source != fixture.source {
+            return Err(format!("fixture {ordinal} does not match the shared source").into());
+        }
         let source_sha256 = format!("{:x}", Sha256::digest(artifact.source.as_bytes()));
         let source = DiagramSource {
             diagram_id: format!("diagram-{ordinal}-{}", &source_sha256[..12]),
@@ -77,6 +90,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
         })?;
     }
-    println!("validated 27 Mermaid fixtures ({total_svg_bytes} SVG bytes)");
+    println!("validated {count} Mermaid fixtures ({total_svg_bytes} SVG bytes)");
     Ok(())
 }

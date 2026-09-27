@@ -14,19 +14,26 @@ const BLOCK_MARKER = /\ue000MARKLITE_BLOCK_(\d+)\ue001/g;
 export const SOURCE_BLOCK_ATTRIBUTE = 'data-marklite-source-block';
 
 export function tagSourceBlockElements(fragment: DocumentFragment | HTMLElement, baseIndex = 0): void {
-  let pending: string | null = null;
-  for (const node of Array.from(fragment.childNodes)) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      const value = node.textContent ?? '';
-      BLOCK_MARKER.lastIndex = 0;
-      for (const match of value.matchAll(BLOCK_MARKER)) pending = match[1];
-      const withoutMarkers = value.replace(BLOCK_MARKER, '');
-      if (withoutMarkers) node.textContent = withoutMarkers;
-      else node.parentNode?.removeChild(node);
-    } else if (node instanceof HTMLElement && pending !== null) {
-      node.setAttribute(SOURCE_BLOCK_ATTRIBUTE, String(Number(pending) - baseIndex));
-      pending = null;
+  // Raw HTML may place transport markers inside cells/containers. Collect only
+  // marked text nodes before mutating so DOM traversal cannot skip a sibling.
+  const walker = fragment.ownerDocument!.createTreeWalker(fragment, NodeFilter.SHOW_TEXT);
+  const marked: Array<{ node: Node; index: string }> = [];
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    let index: string | null = null;
+    BLOCK_MARKER.lastIndex = 0;
+    for (const match of (node.textContent ?? '').matchAll(BLOCK_MARKER)) index = match[1];
+    if (index !== null) marked.push({ node, index });
+  }
+  for (const { node, index } of marked) {
+    let target = node.nextSibling;
+    while (target && !(target instanceof HTMLElement)) target = target.nextSibling;
+    if (target instanceof HTMLElement) {
+      target.setAttribute(SOURCE_BLOCK_ATTRIBUTE, String(Number(index) - baseIndex));
     }
+    const withoutMarkers = (node.textContent ?? '').replace(BLOCK_MARKER, '');
+    if (withoutMarkers) node.textContent = withoutMarkers;
+    else node.parentNode?.removeChild(node);
   }
 }
 
@@ -55,8 +62,8 @@ export function findSourceBlockTarget(map: SourceBlockScrollMap, offsetUtf16: nu
   return { element: elements[index], fraction };
 }
 
-export function findVisibleSourceBlockLine(map: SourceBlockScrollMap, host: HTMLElement): number | null {
-  const bounds = host.getBoundingClientRect();
+export function findVisibleSourceBlockLine(map: SourceBlockScrollMap, host: HTMLElement, viewport: HTMLElement = host): number | null {
+  const bounds = viewport.getBoundingClientRect();
   if (bounds.width <= 0 || bounds.height <= 0 || !host.ownerDocument.elementFromPoint) return null;
   // Hit testing visits painted content without forcing layout of offscreen content-visibility groups.
   // Probe past block margins, while preferring the source block nearest the viewport top.

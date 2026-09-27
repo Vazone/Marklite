@@ -1,14 +1,14 @@
 import { historyField } from '@codemirror/commands';
-import { EditorState, type Extension } from '@codemirror/state';
+import { EditorSelection, EditorState, type Extension } from '@codemirror/state';
 
-export type SerializedEditorState = {
-  selection?: unknown;
+export type EditorSnapshot = {
+  selection: EditorSelection;
   history?: unknown;
 };
 
 type SnapshotControllerOptions = {
   delayMs?: number;
-  serialize?: (state: EditorState) => SerializedEditorState;
+  serialize?: (state: EditorState) => EditorSnapshot;
 };
 
 export type EditorSessionSnapshotController = {
@@ -17,19 +17,27 @@ export type EditorSessionSnapshotController = {
   cancel(): void;
 };
 
-export function serializeEditorState(state: EditorState): SerializedEditorState {
-  const { selection, history } = state.toJSON({ history: historyField });
-  return { selection, history };
+export function snapshotEditorState(state: EditorState): EditorSnapshot {
+  // This cache never crosses IPC or survives the process. Keep immutable values
+  // directly: EditorState.toJSON also flattens the entire document before it can
+  // discard `doc`, and serializes the undo history on every selection update.
+  return { selection: state.selection, history: state.field(historyField, false) };
 }
 
 export function createEditorState(
   doc: string,
   extensions: Extension,
-  serialized: SerializedEditorState | null
+  serialized: EditorSnapshot | null
 ): EditorState {
   if (serialized && typeof serialized === 'object') {
     try {
-      return EditorState.fromJSON({ ...serialized, doc }, { extensions }, { history: historyField });
+      return EditorState.create({
+        doc,
+        selection: serialized.selection,
+        extensions: serialized.history === undefined
+          ? extensions
+          : [extensions, historyField.init(() => serialized.history)]
+      });
     } catch {
       // A snapshot is process-local cache. Fall back instead of blocking the editor.
     }
@@ -39,11 +47,11 @@ export function createEditorState(
 }
 
 export function createEditorSessionSnapshotController(
-  emit: (state: SerializedEditorState) => void,
+  emit: (state: EditorSnapshot) => void,
   options: SnapshotControllerOptions = {}
 ): EditorSessionSnapshotController {
   const delayMs = options.delayMs ?? 400;
-  const serialize = options.serialize ?? serializeEditorState;
+  const serialize = options.serialize ?? snapshotEditorState;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let pendingState: EditorState | null = null;
 

@@ -31,6 +31,23 @@ function localImageEnvelope(): Uint8Array {
 }
 
 describe('validated Tauri command client', () => {
+  test('passes Android PNG export target as a tree resource', async () => {
+    const targetPath = 'content://provider/tree/chapters';
+    const request: ExportRequest = {
+      snapshot: { jobId: 'png-1', tabId: 'tab-1', contentRevision: 1,
+        sourcePath: null, title: 'Article.md', content: '# Chapter' },
+      targetPath, targetKind: 'directory', format: 'png', mindMapSvg: null,
+      options: { paperSize: 'a4', orientation: 'portrait', margin: 'normal',
+        includeTitle: true, includeLocalImages: false }
+    };
+    const { client, invoke } = clientWithResponse({
+      jobId: 'png-1', format: 'png', path: targetPath, targetKind: 'directory', warnings: []
+    });
+    await client.exportDocument(request);
+    expect(invoke).toHaveBeenCalledWith('export_document', {
+      request, sourceResource: null, targetResource: { kind: 'androidTree', uri: targetPath }
+    });
+  });
   test('validates the shared virtual preview fixture and its versioned commands', async () => {
     const invoke = vi.fn(async (command: string) => {
       if (command === 'render_markdown') return {
@@ -261,7 +278,9 @@ describe('validated Tauri command client', () => {
 
     expect(invoke.mock.calls).toEqual([
       ['open_markdown_file', { path: 'C:\\docs\\note.md' }],
-      ['export_document', { request: exportRequest }],
+      ['export_document', { request: exportRequest,
+        sourceResource: { kind: 'desktopFile', path: exportRequest.snapshot.sourcePath },
+        targetResource: { kind: 'desktopFile', path: exportRequest.targetPath } }],
       ['suggest_export_path', {defaultPath:'C:\\docs\\note.html'}],
       ['remember_export_directory', {targetPath:'C:\\last\\note.html'}],
       ['get_startup_file_arg', undefined],

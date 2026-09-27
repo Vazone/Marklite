@@ -3,7 +3,7 @@ use std::{ffi::OsStr, fs};
 use pulldown_cmark::{html, Options, Parser};
 use serde_json::{json, Value};
 
-use crate::services::markdown_service;
+use crate::{services::markdown_service, models::markdown_event};
 
 // Observation harness: reuse the production options and renderer without changing
 // application behavior. HTML normalization and comparison run in the JS driver.
@@ -16,13 +16,13 @@ pub fn run(input: &OsStr, output: &OsStr) {
             let mut commonmark = String::new();
             html::push_html(&mut commonmark, Parser::new_ext(markdown, Options::empty()));
             let mut gfm = String::new();
-            html::push_html(
+            markdown_event::push_html(
                 &mut gfm,
                 markdown_service::profile_events(markdown, markdown_service::SyntaxProfile::Gfm)
                     .into_iter(),
             );
             let mut configured = String::new();
-            html::push_html(
+            markdown_event::push_html(
                 &mut configured,
                 markdown_service::profile_events(
                     markdown,

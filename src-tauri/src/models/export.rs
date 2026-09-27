@@ -1,5 +1,15 @@
 use serde::{Deserialize, Serialize};
 
+/// A cancellation acknowledgement is not a terminal export result.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ExportCancelStatus {
+    Requested,
+    NotRunning,
+    TooLate,
+    Unsupported,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ExportFormat {

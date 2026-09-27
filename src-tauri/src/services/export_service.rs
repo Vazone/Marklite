@@ -1,15 +1,15 @@
 use super::export_progress::{ExportReporter, ExportStage};
+use crate::models::diagram_assets::PreparedDiagrams;
 #[cfg(test)]
 use crate::models::export::ExportWarning;
+use crate::services::export_resources::ExportResourceResolver;
 use crate::{
     models::{
         app_error::AppError,
         export::{ExportRequest, ExportResult},
     },
     services::{
-        diagram_export_service::{self, DiagramExportMode, PreparedDiagrams},
-        export_core, export_docx_writer, export_html_writer,
-        export_semantic::SemanticDocument,
+        export_core, export_docx_writer, export_html_writer, export_semantic::SemanticDocument,
         mind_map_svg,
     },
 };
@@ -29,66 +29,6 @@ pub struct PreparedPdf {
 #[cfg(test)]
 pub fn export_html(request: &ExportRequest) -> Result<ExportResult, AppError> {
     export_html_with_policy(request, ExportCommitPolicy::Replace)
-}
-
-pub async fn export_html_with_runtime(
-    app: &tauri::AppHandle,
-    request: &ExportRequest,
-    policy: ExportCommitPolicy,
-    isolate_profile: bool,
-    reporter: &ExportReporter,
-) -> Result<ExportResult, AppError> {
-    reporter.phase(ExportStage::Parsing);
-    let document = SemanticDocument::parse(
-        &request.snapshot.content,
-        request.snapshot.source_path.as_deref(),
-    );
-    export_html_with_runtime_document(
-        app,
-        request,
-        policy,
-        isolate_profile,
-        &document,
-        || None,
-        reporter,
-    )
-    .await
-}
-
-pub(crate) async fn export_html_with_runtime_document(
-    app: &tauri::AppHandle,
-    request: &ExportRequest,
-    policy: ExportCommitPolicy,
-    isolate_profile: bool,
-    document: &SemanticDocument,
-    cancelled: impl Fn() -> Option<AppError> + Send + Sync,
-    reporter: &ExportReporter,
-) -> Result<ExportResult, AppError> {
-    reporter.phase(ExportStage::Validating);
-    let target = export_core::validate_request(request)?;
-    export_core::preflight_commit(request, policy)?;
-    reporter.phase(ExportStage::Resources);
-    if document.diagram_sources().is_empty() {
-        return export_html_from_document_controlled(
-            request,
-            policy,
-            document,
-            PreparedDiagrams::empty(),
-            || None,
-            reporter,
-        );
-    }
-    let prepared = diagram_export_service::prepare(
-        app,
-        document,
-        &target,
-        isolate_profile,
-        None,
-        &cancelled,
-        DiagramExportMode::Html,
-    )
-    .await?;
-    export_html_from_document_controlled(request, policy, document, prepared, cancelled, reporter)
 }
 
 pub(crate) fn export_html_with_document(
@@ -149,7 +89,7 @@ fn export_html_from_document(
     )
 }
 
-fn export_html_from_document_controlled(
+pub(crate) fn export_html_from_document_controlled(
     request: &ExportRequest,
     policy: ExportCommitPolicy,
     document: &SemanticDocument,
@@ -157,9 +97,31 @@ fn export_html_from_document_controlled(
     cancelled: impl Fn() -> Option<AppError>,
     reporter: &ExportReporter,
 ) -> Result<ExportResult, AppError> {
+    let resources = ExportResourceResolver::new(
+        request.snapshot.source_path.as_deref(),
+        request.options.include_local_images,
+    );
+    export_html_from_document_with_resources(
+        request, policy, document, prepared, resources, cancelled, reporter,
+    )
+}
+
+pub(crate) fn export_html_from_document_with_resources(
+    request: &ExportRequest,
+    policy: ExportCommitPolicy,
+    document: &SemanticDocument,
+    prepared: PreparedDiagrams,
+    resources: ExportResourceResolver<'_>,
+    cancelled: impl Fn() -> Option<AppError>,
+    reporter: &ExportReporter,
+) -> Result<ExportResult, AppError> {
     reporter.phase(ExportStage::Rendering);
-    let (body, mut warnings) =
-        export_html_writer::render_body_with_diagrams(document, request, &prepared.artifacts);
+    let (body, mut warnings) = export_html_writer::render_body_with_resources(
+        document,
+        request,
+        &prepared.artifacts,
+        resources,
+    );
     warnings.extend(prepared.warnings);
     let html = export_html_writer::standalone(request, &body, None);
     if let Some(error) = cancelled() {
@@ -174,66 +136,6 @@ fn export_html_from_document_controlled(
 #[cfg(test)]
 pub fn export_docx(request: &ExportRequest) -> Result<ExportResult, AppError> {
     export_docx_with_policy(request, ExportCommitPolicy::Replace)
-}
-
-pub async fn export_docx_with_runtime(
-    app: &tauri::AppHandle,
-    request: &ExportRequest,
-    policy: ExportCommitPolicy,
-    isolate_profile: bool,
-    reporter: &ExportReporter,
-) -> Result<ExportResult, AppError> {
-    reporter.phase(ExportStage::Parsing);
-    let document = SemanticDocument::parse(
-        &request.snapshot.content,
-        request.snapshot.source_path.as_deref(),
-    );
-    export_docx_with_runtime_document(
-        app,
-        request,
-        policy,
-        isolate_profile,
-        &document,
-        || None,
-        reporter,
-    )
-    .await
-}
-
-pub(crate) async fn export_docx_with_runtime_document(
-    app: &tauri::AppHandle,
-    request: &ExportRequest,
-    policy: ExportCommitPolicy,
-    isolate_profile: bool,
-    document: &SemanticDocument,
-    cancelled: impl Fn() -> Option<AppError> + Send + Sync,
-    reporter: &ExportReporter,
-) -> Result<ExportResult, AppError> {
-    reporter.phase(ExportStage::Validating);
-    let target = export_core::validate_request(request)?;
-    export_core::preflight_commit(request, policy)?;
-    reporter.phase(ExportStage::Resources);
-    if document.diagram_sources().is_empty() {
-        return export_docx_from_document_controlled(
-            request,
-            policy,
-            document,
-            PreparedDiagrams::empty(),
-            || None,
-            reporter,
-        );
-    }
-    let prepared = diagram_export_service::prepare(
-        app,
-        document,
-        &target,
-        isolate_profile,
-        None,
-        &cancelled,
-        DiagramExportMode::Docx,
-    )
-    .await?;
-    export_docx_from_document_controlled(request, policy, document, prepared, cancelled, reporter)
 }
 
 pub(crate) fn export_docx_with_document(
@@ -285,7 +187,7 @@ fn export_docx_from_document(
     )
 }
 
-fn export_docx_from_document_controlled(
+pub(crate) fn export_docx_from_document_controlled(
     request: &ExportRequest,
     policy: ExportCommitPolicy,
     document: &SemanticDocument,
@@ -293,9 +195,32 @@ fn export_docx_from_document_controlled(
     cancelled: impl Fn() -> Option<AppError>,
     reporter: &ExportReporter,
 ) -> Result<ExportResult, AppError> {
+    let resources = ExportResourceResolver::new(
+        request.snapshot.source_path.as_deref(),
+        request.options.include_local_images,
+    );
+    export_docx_from_document_with_resources(
+        request, policy, document, prepared, resources, cancelled, reporter,
+    )
+}
+
+pub(crate) fn export_docx_from_document_with_resources(
+    request: &ExportRequest,
+    policy: ExportCommitPolicy,
+    document: &SemanticDocument,
+    prepared: PreparedDiagrams,
+    resources: ExportResourceResolver<'_>,
+    cancelled: impl Fn() -> Option<AppError>,
+    reporter: &ExportReporter,
+) -> Result<ExportResult, AppError> {
     reporter.phase(ExportStage::Rendering);
-    let (bytes, mut warnings) =
-        export_docx_writer::render(request, document, &prepared.rasters, reporter)?;
+    let (bytes, mut warnings) = export_docx_writer::render_with_resources(
+        request,
+        document,
+        &prepared.rasters,
+        reporter,
+        resources,
+    )?;
     warnings.extend(prepared.warnings);
     if let Some(error) = cancelled() {
         return Err(error);
@@ -336,11 +261,15 @@ pub fn export_svg_reported(
     let svg = request.mind_map_svg.as_deref().ok_or_else(|| {
         AppError::new("INVALID_MIND_MAP_SVG", "脑图 SVG 导出请求缺少矢量画布内容")
     })?;
-    mind_map_svg::validate(svg)?;
+    validate_mind_map_svg(svg)?;
     reporter.phase(ExportStage::Committing);
     export_core::commit(request, svg.as_bytes(), ExportCommitPolicy::Replace)?;
     reporter.phase(ExportStage::CleaningUp);
     Ok(export_core::result(request, Vec::new()))
+}
+
+pub(crate) fn validate_mind_map_svg(svg: &str) -> Result<(), AppError> {
+    mind_map_svg::validate(svg)
 }
 
 #[cfg(test)]
@@ -417,15 +346,10 @@ mod tests {
         export_docx, export_docx_with_prepared, export_html, export_html_with_prepared, export_svg,
         prepare_pdf, prepare_pdf_with_diagrams, validate_request,
     };
+    use crate::models::diagram_assets::{PreparedDiagrams, RasterDiagram};
     use crate::services::export_docx_writer::{fit_docx_picture_to_content_width, DocxPageLayout};
     use crate::utils::test_support::TestPath;
-    use crate::{
-        models::diagram::RenderedDiagram,
-        services::{
-            diagram_export_service::{PreparedDiagrams, RasterDiagram},
-            export_semantic::SemanticDocument,
-        },
-    };
+    use crate::{models::diagram::RenderedDiagram, services::export_semantic::SemanticDocument};
     use std::collections::HashMap;
 
     fn unique_path(extension: &str) -> TestPath {
@@ -457,6 +381,121 @@ mod tests {
                 include_local_images: false,
             },
             mind_map_svg: None,
+        }
+    }
+
+    #[test]
+    fn code_highlighting_survives_static_html_and_docx_writers() {
+        let source =
+            "```js\nconst name = '<img onerror=alert(1)>'; // 你好😀\n\tconsole.log(name);\n```";
+        let html_path = unique_path("html");
+        let result = export_html(&request(ExportFormat::Html, &html_path, source)).unwrap();
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        let html = fs::read_to_string(&html_path).unwrap();
+        assert!(
+            html.contains("class=\"tok-keyword\">const</span>"),
+            "{html}"
+        );
+        assert!(html.contains("&lt;img onerror=alert(1)&gt;"));
+        assert!(!html.contains("<img onerror"));
+        assert!(html.contains("你好😀"));
+        assert!(html.contains("color: #8250DF"));
+        let docx_path = unique_path("docx");
+        let result = export_docx(&request(ExportFormat::Docx, &docx_path, source)).unwrap();
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        let xml = docx_zip_entry(&fs::read(&docx_path).unwrap(), "word/document.xml");
+        assert!(xml.contains("w:color w:val=\"8250DF\""), "{xml}");
+        assert!(xml.contains("const"));
+        assert!(xml.contains("<w:br"), "code newline must survive: {xml}");
+        assert!(xml.contains("<w:tab"), "code tab must survive: {xml}");
+        assert!(xml.contains("你好😀"));
+        assert!(xml.contains("&lt;img onerror=alert(1)&gt;"));
+    }
+
+    #[test]
+    fn front_matter_diagnostics_survive_writers_and_batched_rendering() {
+        use crate::services::{export_html_writer, export_resources::ExportResourceResolver};
+        let content = "---\nvalue: [\n---\n# First\n\nBody\n\n# Second";
+        let document = SemanticDocument::parse(content, None);
+        assert_eq!(document.warnings().len(), 1);
+        let expected = &document.warnings()[0];
+        assert_eq!(expected.code, "FRONT_MATTER_INVALID");
+        assert!(expected.target.as_ref().unwrap().starts_with("line:"));
+        assert!(expected.message.contains("column"));
+        for format in [ExportFormat::Html, ExportFormat::Docx] {
+            let target = unique_path(format.extension());
+            let request = request(format, &target, content);
+            let result = match format {
+                ExportFormat::Html => super::export_html(&request).unwrap(),
+                _ => super::export_docx(&request).unwrap(),
+            };
+            assert_eq!(result.warnings.len(), 1);
+            assert_eq!(result.warnings[0].code, expected.code);
+            assert_eq!(result.warnings[0].target, expected.target);
+        }
+        // PDF parts and PNG chapters share this production range writer and
+        // keep the same resource collector for the full job.
+        for pdf_part in [true, false] {
+            let target = unique_path("pdf");
+            let request = request(ExportFormat::Pdf, &target, content);
+            let mut resources = ExportResourceResolver::new(None, false);
+            let mut html = String::new();
+            for root in document.roots() {
+                html.push_str(&export_html_writer::render_roots_with_resources(
+                    &document,
+                    &[*root],
+                    &request,
+                    &HashMap::new(),
+                    &mut resources,
+                    pdf_part,
+                ));
+            }
+            assert!(html.contains("value: ["));
+            let warnings = resources.into_warnings();
+            assert_eq!(warnings.len(), 1);
+            assert_eq!(warnings[0].target, expected.target);
+        }
+        assert!(
+            SemanticDocument::parse("---\ntitle: Good\n---\n# Body", None)
+                .warnings()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn cancelled_writers_preserve_existing_targets_without_diagrams() {
+        for format in [ExportFormat::Html, ExportFormat::Docx] {
+            let target = unique_path(format.extension());
+            fs::write(&target, "original").unwrap();
+            let request = request(format, &target, "# New content");
+            let document = SemanticDocument::parse(&request.snapshot.content, None);
+            let reporter = super::ExportReporter::silent("job-1", format);
+            let cancelled = || {
+                Some(crate::models::app_error::AppError::new(
+                    "EXPORT_CANCELLED",
+                    "cancelled",
+                ))
+            };
+            let result = match format {
+                ExportFormat::Html => super::export_html_from_document_controlled(
+                    &request,
+                    super::ExportCommitPolicy::Replace,
+                    &document,
+                    PreparedDiagrams::empty(),
+                    cancelled,
+                    &reporter,
+                ),
+                _ => super::export_docx_from_document_controlled(
+                    &request,
+                    super::ExportCommitPolicy::Replace,
+                    &document,
+                    PreparedDiagrams::empty(),
+                    cancelled,
+                    &reporter,
+                ),
+            };
+            assert_eq!(result.unwrap_err().code, "EXPORT_CANCELLED");
+            assert_eq!(fs::read_to_string(&target).unwrap(), "original");
         }
     }
 
@@ -561,6 +600,151 @@ mod tests {
         assert_eq!(picture, png);
     }
 
+    #[test]
+    fn docx_repeated_diagrams_keep_each_description() {
+        for count in [2, 40] {
+            let markdown = "```mermaid\nflowchart TD\nA-->B\n```\n\n".repeat(count);
+            let sources = SemanticDocument::parse(&markdown, None).diagram_sources();
+            let png = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=").unwrap();
+            let prepared = PreparedDiagrams {
+                artifacts: HashMap::new(),
+                print_artifacts: HashMap::new(),
+                rasters: sources
+                    .iter()
+                    .map(|source| {
+                        (
+                            source.diagram_id.clone(),
+                            RasterDiagram {
+                                png: png.clone(),
+                                width: 1,
+                                height: 1,
+                            },
+                        )
+                    })
+                    .collect(),
+                warnings: Vec::new(),
+            };
+            let path = unique_path("docx");
+            export_docx_with_prepared(&request(ExportFormat::Docx, &path, &markdown), prepared)
+                .unwrap();
+            let bytes = fs::read(&path).unwrap();
+            let xml = docx_zip_entry(&bytes, "word/document.xml");
+            assert_eq!(xml.matches("<w:drawing>").count(), count);
+            for source in &sources {
+                let description = format!(
+                    "descr=\"Mermaid 图表，源码字节 {}-{}\"",
+                    source.source_start_byte, source.source_end_byte
+                );
+                assert_eq!(xml.matches(&description).count(), 1);
+            }
+            let archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            assert_eq!(
+                archive
+                    .file_names()
+                    .filter(|name| name.starts_with("word/media/") && !name.ends_with('/'))
+                    .count(),
+                1
+            );
+            fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn docx_diagrams_preserve_footnote_instances() {
+        let markdown = "```mermaid\nflowchart TD\nA-->B\n```\n\nReference[^a] and again[^a].\n\n[^a]: Footnote\n\n    ```mermaid\n    flowchart TD\n    A-->B\n    ```\n";
+        let sources = SemanticDocument::parse(markdown, None).diagram_sources();
+        assert_eq!(sources.len(), 2);
+        let png = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=").unwrap();
+        let prepared = PreparedDiagrams {
+            artifacts: HashMap::new(),
+            print_artifacts: HashMap::new(),
+            warnings: Vec::new(),
+            rasters: sources
+                .iter()
+                .map(|source| {
+                    (
+                        source.diagram_id.clone(),
+                        RasterDiagram {
+                            png: png.clone(),
+                            width: 1,
+                            height: 1,
+                        },
+                    )
+                })
+                .collect(),
+        };
+        let path = unique_path("docx");
+        export_docx_with_prepared(&request(ExportFormat::Docx, &path, markdown), prepared).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let document = docx_zip_entry(&bytes, "word/document.xml");
+        let footnotes = docx_zip_entry(&bytes, "word/footnotes.xml");
+        assert_eq!(document.matches("descr=\"Mermaid").count(), 1);
+        assert_eq!(footnotes.matches("descr=\"Mermaid").count(), 2);
+        assert!(read_docx(&bytes).is_ok());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn docx_mixed_diagrams_and_images_share_media_across_parts() {
+        let directory = tempfile::tempdir().unwrap();
+        let png = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=").unwrap();
+        fs::write(directory.path().join("pixel.png"), &png).unwrap();
+        let markdown = "# Diagram export\n\n![ordinary](pixel.png)\n\n```mermaid\nflowchart TD\nA-->B\n```\n\n```mermaid\nflowchart TD\nC-->D\n```\n\n| Image | Label |\n| --- | --- |\n| ![table](pixel.png) | Table picture |\n\nReference[^a].\n\n[^a]: ![footnote](pixel.png)\n\n    ```mermaid\n    flowchart TD\n    A-->B\n    ```\n";
+        let sources = SemanticDocument::parse(markdown, None).diagram_sources();
+        assert_eq!(sources.len(), 3);
+        let prepared = PreparedDiagrams {
+            artifacts: HashMap::new(),
+            print_artifacts: HashMap::new(),
+            warnings: Vec::new(),
+            rasters: sources
+                .iter()
+                .map(|source| {
+                    (
+                        source.diagram_id.clone(),
+                        RasterDiagram {
+                            png: png.clone(),
+                            width: 1,
+                            height: 1,
+                        },
+                    )
+                })
+                .collect(),
+        };
+        let path = directory.path().join("mixed.docx");
+        let mut req = request(ExportFormat::Docx, &path, markdown);
+        req.options.include_local_images = true;
+        fs::write(directory.path().join("source.md"), markdown).unwrap();
+        req.snapshot.source_path = Some(
+            directory
+                .path()
+                .join("source.md")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        export_docx_with_prepared(&req, prepared).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let xml = docx_zip_entry(&bytes, "word/document.xml");
+        let notes = docx_zip_entry(&bytes, "word/footnotes.xml");
+        assert_eq!(xml.matches("<w:drawing>").count(), 4);
+        assert_eq!(notes.matches("<w:drawing>").count(), 2);
+        assert_eq!(xml.matches("descr=\"Mermaid").count(), 2);
+        assert_eq!(notes.matches("descr=\"Mermaid").count(), 1);
+        let archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+        assert_eq!(
+            archive
+                .file_names()
+                .filter(|name| name.starts_with("word/media/") && !name.ends_with('/'))
+                .count(),
+            1
+        );
+        assert!(read_docx(&bytes).is_ok());
+        if let Some(output) = std::env::var_os("MARKLITE_DOCX_EVIDENCE_DIR") {
+            let output = std::path::PathBuf::from(output);
+            fs::create_dir_all(&output).unwrap();
+            fs::write(output.join("mixed.docx"), bytes).unwrap();
+        }
+    }
+
     fn docx_zip_entry(bytes: &[u8], name: &str) -> String {
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         let mut content = String::new();
@@ -659,6 +843,96 @@ mod tests {
             validate_request(&directory_request).unwrap_err().code,
             "INVALID_FILE_TARGET"
         );
+    }
+
+    #[test]
+    fn highlight_exports_keep_nested_link_table_and_footnote_styles() {
+        let source = "==**bold** [link](https://example.com)==\n\n| A |\n|---|\n| ==cell== |\n\nNote[^n]\n\n[^n]: ==foot==";
+        let html_path = unique_path("html");
+        let result = export_html(&request(ExportFormat::Html, &html_path, source)).unwrap();
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        let html = fs::read_to_string(&html_path).unwrap();
+        assert!(html.contains("<mark><strong>bold</strong> <a "), "{html}");
+        assert!(html.contains(">link</a></mark>"), "{html}");
+        assert!(html.contains("<mark>cell</mark>"), "{html}");
+        assert!(html.contains("<mark>foot</mark>"), "{html}");
+
+        let docx_path = unique_path("docx");
+        let result = export_docx(&request(ExportFormat::Docx, &docx_path, source)).unwrap();
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        let bytes = fs::read(&docx_path).unwrap();
+        let xml = docx_zip_entry(&bytes, "word/document.xml");
+        assert!(
+            xml.matches("<w:highlight w:val=\"yellow\"").count() >= 3,
+            "{xml}"
+        );
+        let link = xml
+            .split("<w:hyperlink")
+            .nth(1)
+            .unwrap()
+            .split("</w:hyperlink>")
+            .next()
+            .unwrap();
+        assert!(link.contains("<w:highlight"), "{link}");
+        let footnotes = docx_zip_entry(&bytes, "word/footnotes.xml");
+        assert!(
+            footnotes.contains("<w:highlight w:val=\"yellow\""),
+            "{footnotes}"
+        );
+        assert!(footnotes.contains("foot"), "{footnotes}");
+    }
+
+    #[test]
+    fn scripts_export_as_semantic_runs_in_links_tables_and_footnotes() {
+        let source = "H~**2**~O [x^2^](https://example.com)\n\n| A |\n|---|\n| ==H~2~O== |\n\nNote[^n]\n\n[^n]: x^2^";
+        let html_path = unique_path("html");
+        let result = export_html(&request(ExportFormat::Html, &html_path, source)).unwrap();
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        let html = fs::read_to_string(&html_path).unwrap();
+        assert!(html.contains("H<sub><strong>2</strong></sub>O"), "{html}");
+        assert!(html.contains("x<sup>2</sup></a>"), "{html}");
+        assert!(html.contains("<mark>H<sub>2</sub>O</mark>"), "{html}");
+        let docx_path = unique_path("docx");
+        let result = export_docx(&request(ExportFormat::Docx, &docx_path, source)).unwrap();
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        let bytes = fs::read(&docx_path).unwrap();
+        let xml = docx_zip_entry(&bytes, "word/document.xml");
+        assert!(xml.matches("w:val=\"subscript\"").count() >= 2, "{xml}");
+        let link = xml
+            .split("<w:hyperlink")
+            .nth(1)
+            .unwrap()
+            .split("</w:hyperlink>")
+            .next()
+            .unwrap();
+        assert!(link.contains("w:val=\"superscript\""), "{link}");
+        let footnotes = docx_zip_entry(&bytes, "word/footnotes.xml");
+        assert!(footnotes.contains("w:val=\"superscript\""), "{footnotes}");
+    }
+
+    #[test]
+    fn emoji_shortcodes_share_html_and_docx_semantics() {
+        let source =
+            "# :smile:\n\n**:+1:** [:-1:](https://example.com/:smile:) `:smile:` :unknown_alias:";
+        let html_path = unique_path("html");
+        export_html(&request(ExportFormat::Html, &html_path, source)).unwrap();
+        let html = fs::read_to_string(&html_path).unwrap();
+        assert!(html.contains("😄</h1>"), "{html}");
+        assert!(html.contains("<strong>👍</strong>"), "{html}");
+        assert!(html.contains("👎</a>"), "{html}");
+        assert!(html.contains("<code>:smile:</code>"), "{html}");
+        assert!(html.contains(":unknown_alias:"), "{html}");
+        assert!(html.contains("https://example.com/:smile:"), "{html}");
+
+        let docx_path = unique_path("docx");
+        export_docx(&request(ExportFormat::Docx, &docx_path, source)).unwrap();
+        let bytes = fs::read(&docx_path).unwrap();
+        let xml = docx_zip_entry(&bytes, "word/document.xml");
+        for expected in ["😄", "👍", "👎", ":smile:", ":unknown_alias:"] {
+            assert!(xml.contains(expected), "missing {expected}: {xml}");
+        }
+        let links = docx_zip_entry(&bytes, "word/_rels/document.xml.rels");
+        assert!(links.contains("https://example.com/:smile:"), "{links}");
     }
 
     #[test]
@@ -975,6 +1249,45 @@ mod tests {
     }
 
     #[test]
+    fn toc_exports_link_repeated_chinese_headings_to_real_html_and_docx_targets() {
+        let markdown = "---\ntitle: Metadata\n---\n[TOC]\n\n# 中文标题\n\n[TOC]\n\n## 中文标题\n\n### A < B & C\n\n[TOC]";
+        let outline = crate::services::markdown_service::analyze_markdown(markdown).outline;
+        let path = unique_path("html");
+        let result = export_html(&request(ExportFormat::Html, &path, markdown)).unwrap();
+        assert!(result.warnings.is_empty());
+        let html = fs::read_to_string(&path).unwrap();
+        assert!(!html.contains("title: Metadata"));
+        assert!(html.contains(".document-toc > .toc-level-3"));
+        let decoded = percent_encoding::percent_decode_str(&html)
+            .decode_utf8()
+            .unwrap();
+        for heading in &outline {
+            let slug = html_escape::encode_double_quoted_attribute(&heading.slug);
+            assert_eq!(decoded.matches(&format!("href=\"#{slug}\"")).count(), 3);
+            assert_eq!(html.matches(&format!("id=\"{slug}\"")).count(), 1);
+        }
+        assert!(html.contains("A &lt; B &amp; C"));
+        let path = unique_path("docx");
+        let result = export_docx(&request(ExportFormat::Docx, &path, markdown)).unwrap();
+        assert!(result.warnings.is_empty());
+        let xml = docx_zip_entry(&fs::read(&path).unwrap(), "word/document.xml");
+        for index in 1..=outline.len() {
+            assert_eq!(
+                xml.matches(&format!("w:name=\"marklite_{index}\"")).count(),
+                1
+            );
+            assert_eq!(
+                xml.matches(&format!("w:anchor=\"marklite_{index}\""))
+                    .count(),
+                3
+            );
+        }
+        assert!(xml.contains("w:left=\"360\""));
+        assert!(xml.contains("w:left=\"720\""));
+        assert!(!xml.contains("[TOC]"));
+    }
+
+    #[test]
     fn email_links_and_heading_anchors_survive_every_export_surface() {
         let markdown = "# 中文标题\n\n# 中文标题\n\n## Dash-Name\n\n## Explicit {#custom-id}\n\n[中文](#中文标题) [second](#中文标题-2) [dash](#dash-name) [explicit](#custom-id)\n\n<one@example.org> two@example.org [three](mailto:three@example.org)";
         let html_path = unique_path("html");
@@ -1095,6 +1408,99 @@ mod tests {
     }
 
     #[test]
+    fn docx_footnote_links_keep_targets_and_share_image_relationship_scope() {
+        fn attrs(xml: &str, tag: &[u8]) -> Vec<HashMap<String, String>> {
+            let mut reader = quick_xml::Reader::from_str(xml);
+            let mut rows = Vec::new();
+            loop {
+                match reader.read_event().unwrap() {
+                    quick_xml::events::Event::Start(e) | quick_xml::events::Event::Empty(e)
+                        if e.name().as_ref() == tag =>
+                    {
+                        rows.push(
+                            e.attributes()
+                                .map(|a| {
+                                    let a = a.unwrap();
+                                    (
+                                        String::from_utf8(a.key.as_ref().to_vec()).unwrap(),
+                                        a.decoded_and_normalized_value(
+                                            quick_xml::XmlVersion::Implicit1_0,
+                                            reader.decoder(),
+                                        )
+                                        .unwrap()
+                                        .into_owned(),
+                                    )
+                                })
+                                .collect(),
+                        );
+                    }
+                    quick_xml::events::Event::Eof => break,
+                    _ => {}
+                }
+            }
+            rows
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let png = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=").unwrap();
+        fs::write(directory.path().join("pixel.png"), png).unwrap();
+        let markdown = "# Target {#target}\n\nFirst[^n] and again[^n].\n\n[^n]: [**web**](https://example.com/?a=1&b=2) [mail](mailto:reader@example.com) [jump](#target) ![pixel](pixel.png) $x^2$";
+        fs::write(directory.path().join("source.md"), markdown).unwrap();
+        let path = directory.path().join("linked.docx");
+        let mut req = request(ExportFormat::Docx, &path, markdown);
+        req.options.include_local_images = true;
+        req.snapshot.source_path = Some(
+            directory
+                .path()
+                .join("source.md")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let result = export_docx(&req).unwrap();
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        let bytes = fs::read(path).unwrap();
+        let notes = docx_zip_entry(&bytes, "word/footnotes.xml");
+        let document = docx_zip_entry(&bytes, "word/document.xml");
+        let relations = attrs(
+            &docx_zip_entry(&bytes, "word/_rels/footnotes.xml.rels"),
+            b"Relationship",
+        );
+        let ids = relations
+            .iter()
+            .map(|r| r["Id"].as_str())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(ids.len(), relations.len());
+        let links = attrs(&notes, b"w:hyperlink");
+        assert!(!links.is_empty());
+        let bookmarks = attrs(&document, b"w:bookmarkStart");
+        for link in &links {
+            if let Some(id) = link.get("r:id") {
+                let rel = relations.iter().find(|r| &r["Id"] == id).unwrap();
+                assert!(rel["Type"].ends_with("/hyperlink"));
+                assert_eq!(rel["TargetMode"], "External");
+                assert!(
+                    ["https://example.com/?a=1&b=2", "mailto:reader@example.com"]
+                        .contains(&rel["Target"].as_str())
+                );
+            } else {
+                assert!(bookmarks
+                    .iter()
+                    .any(|b| b.get("w:name") == link.get("w:anchor")));
+            }
+        }
+        assert!(relations.iter().any(|r| r["Type"].ends_with("/image")));
+        assert!(relations
+            .iter()
+            .any(|r| r["Target"] == "https://example.com/?a=1&b=2"));
+        assert!(relations
+            .iter()
+            .any(|r| r["Target"] == "mailto:reader@example.com"));
+        assert!(links.iter().any(|r| r.contains_key("w:anchor")));
+        assert!(notes.contains("<m:oMath>"));
+        assert!(notes.contains("<w:b />"));
+        assert!(read_docx(&bytes).is_ok());
+    }
+
+    #[test]
     fn docx_preserves_distinct_break_footnote_and_table_alignment_semantics() {
         let path = unique_path("docx");
         let markdown = "# Semantic {#semantic}\n\n- item\n\nsoft\nline  \nhard[^1]\n\n| Left | Center | Right |\n| :--- | :----: | ----: |\n| a | b | c |\n\n[^1]: **bold** *italic* [linked](https://example.com/footnote)";
@@ -1118,11 +1524,14 @@ mod tests {
         assert!(footnotes_xml.contains("<w:b />"));
         assert!(footnotes_xml.contains("<w:i />"));
         assert!(footnotes_xml.contains(">linked</w:t>"));
-        assert!(footnotes_xml.contains("> (https://example.com/footnote)</w:t>"));
-        assert!(result.warnings.iter().any(|warning| {
-            warning.code == "DOCX_FOOTNOTE_LINK_DEGRADED"
-                && warning.target.as_deref() == Some("https://example.com/footnote")
-        }));
+        assert!(footnotes_xml.contains("<w:hyperlink"));
+        let relations = docx_zip_entry(&bytes, "word/_rels/footnotes.xml.rels");
+        assert!(relations.contains("https://example.com/footnote"));
+        assert!(relations.contains("relationships/hyperlink"));
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "DOCX_FOOTNOTE_LINK_DEGRADED"));
 
         let html_path = unique_path("html");
         let html_request = request(ExportFormat::Html, &html_path, markdown);

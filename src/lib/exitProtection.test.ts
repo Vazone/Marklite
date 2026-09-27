@@ -110,6 +110,7 @@ describe('exit protection decisions', () => {
     controller.handleCloseRequest(vi.fn());
 
     await expect(controller.discardAndExit()).resolves.toBe(true);
+    expect(closeWindow).toHaveBeenCalledWith(true);
 
     expect(saveDocument).not.toHaveBeenCalled();
     expect(closeWindow).toHaveBeenCalledOnce();
@@ -124,6 +125,7 @@ describe('exit protection decisions', () => {
     controller.handleCloseRequest(vi.fn());
 
     await expect(controller.saveAndExit()).resolves.toBe(true);
+    expect(closeWindow).toHaveBeenCalledWith(false);
 
     expect(saveDocument.mock.calls.map(([item]) => item.id)).toEqual(['first', 'untitled', 'third']);
     expect(closeWindow).toHaveBeenCalledOnce();

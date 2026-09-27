@@ -10,8 +10,6 @@ use tauri::State;
 
 use crate::services::markdown_service::PreviewState;
 
-const VIRTUAL_PREVIEW_MIN_BYTES: usize = 1024 * 1024;
-
 #[tauri::command]
 pub async fn render_markdown(
     content: String,
@@ -22,18 +20,17 @@ pub async fn render_markdown(
     let state = state.inner().clone();
     let generation = state.reserve_generation();
     run_background("Markdown 渲染", move || {
-        if content.len() < VIRTUAL_PREVIEW_MIN_BYTES {
-            let result = markdown_service::render_markdown(&content)?;
-            state.clear_if_current(generation);
-            return Ok(result);
-        }
         let session_id = match (tab_id.as_deref(), content_revision) {
             (Some(tab_id), Some(revision)) if !tab_id.is_empty() && tab_id.len() <= 128 => {
                 format!("{tab_id}:{revision}:{generation}")
             }
             _ => generation.to_string(),
         };
-        let (result, session) = markdown_service::prepare_virtual_preview(&content, session_id)?;
+        let (result, session) = markdown_service::prepare_preview(&content, session_id)?;
+        let Some(session) = session else {
+            state.clear_if_current(generation);
+            return Ok(result);
+        };
         if !state.install(generation, session) {
             return Err(AppError::new(
                 "PREVIEW_SESSION_EXPIRED",

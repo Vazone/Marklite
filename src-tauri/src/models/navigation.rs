@@ -7,7 +7,8 @@ pub enum MarkdownTargetDto {
         fragment: String,
     },
     LocalDocument {
-        path: String,
+        resource: super::resource::ResourceRef,
+        path: Option<String>,
         fragment: Option<String>,
     },
     External {

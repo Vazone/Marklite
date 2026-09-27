@@ -9,6 +9,21 @@ import {
 import capabilityContract from '../shared/markdown-capabilities.json';
 
 describe('MarkLite Markdown guide catalog', () => {
+  test('capability surfaces cover all outputs without advertising Android export', () => {
+    expect(capabilityContract.surfaces).toEqual(expect.arrayContaining([
+      'windowPreview', 'semantic', 'html', 'pdf', 'docx', 'png', 'svg', 'androidPreview', 'androidExport'
+    ]));
+    const keys = [...capabilityContract.surfaces].sort();
+    expect(Object.keys(capabilityContract.surfaceDefaults).sort()).toEqual(keys);
+    for (const entry of capabilityContract.namedExtensions) {
+      expect(Object.keys(entry.statuses).sort()).toEqual(keys);
+      expect(entry.statuses.androidExport).toBe('unsupported');
+      if (entry.statuses.preview === 'source') {
+        expect(entry.statuses.windowPreview).toBe('source');
+        expect(entry.statuses.png).toBe('source');
+      }
+    }
+  });
   const requiredBasic = [
     'atx-headings', 'setext-headings', 'paragraphs', 'line-breaks', 'bold', 'italic',
     'bold-italic', 'blockquotes', 'nested-blockquotes', 'ordered-lists', 'unordered-lists',
@@ -46,7 +61,7 @@ describe('MarkLite Markdown guide catalog', () => {
   test('does not advertise unsupported parser extensions as complete support', () => {
     expect(markdownGuideTopics.find((topic) => topic.id === 'definition-lists')?.support).toBe('supported');
     expect(markdownGuideTopics.find((topic) => topic.id === 'emoji-shortcodes')?.support).toBe(
-      'unsupported'
+      'supported'
     );
     expect(markdownGuideTopics.find((topic) => topic.id === 'bare-url-autolinks')?.support).toBe('supported');
     expect(markdownGuideTopics.find((topic) => topic.id === 'smart-punctuation')?.support).toBe('unsupported');

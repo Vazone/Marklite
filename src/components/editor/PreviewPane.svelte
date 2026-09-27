@@ -1,6 +1,11 @@
 <script lang="ts">
+  import MarkdownDiagnostics from './MarkdownDiagnostics.svelte';
+  import { createPreviewCodeHighlight } from '../../lib/previewCodeHighlight';
+  import { createResourceLinks } from '../../lib/platform/resourceLinks';
+  import { desktopFile } from '../../lib/platform/resources';
+  import type { ResourceRef } from '../../lib/platform/resources';
   import { onDestroy, tick } from 'svelte';
-  import type { AppSettings, DiagramDiagnostic, DiagramSource, DiagramTheme, OutlineItem, RenderedDiagram, SanitizedMarkdownHtml, SourceBlock, VirtualPreviewIndex, VirtualPreviewWindow } from '../../lib/tauriApi';
+  import type { AppSettings, MarkdownDiagnostic, DiagramDiagnostic, DiagramSource, DiagramTheme, OutlineItem, RenderedDiagram, SanitizedMarkdownHtml, SourceBlock, VirtualPreviewIndex, VirtualPreviewWindow } from '../../lib/tauriApi';
   import { api, openEmailLink, openExternalLink, toAppError } from '../../lib/tauriApi';
   import { executeMarkdownTarget } from '../../lib/markdownNavigation';
   import { uiActions } from '../../app/stores/uiStore';
@@ -20,6 +25,10 @@
   import { observeMediaQuery } from '../../lib/mediaQuery';
   import { previewDiagramRuntime } from '../../lib/previewDiagramRuntime';
   import { previewHeightPrefix, previewSegmentAtLine, previewSegmentAtPixel, previewSegmentAtSource, previewWindowAround } from '../../lib/virtualPreviewLayout';
+  import { createPaneZoom, type PaneZoom } from '../../lib/panePinchZoom';
+
+  const resourceLinks = createResourceLinks(api);
+  const codeHighlight = createPreviewCodeHighlight();
 
   export let html: SanitizedMarkdownHtml;
   export let tabId = '';
@@ -29,11 +38,14 @@
   export let virtualPreview: VirtualPreviewIndex | null = null;
   export let diagrams: DiagramSource[] = [];
   export let diagramDiagnostics: DiagramDiagnostic[] = [];
+  export let markdownDiagnostics: MarkdownDiagnostic[] = [];
   export let settings: AppSettings;
+  export let mobile = false;
   export let documentPath: string | null = null;
+  export let documentResource: ResourceRef | null = null;
   export let documentTitle: string;
   export let outline: OutlineItem[];
-  export let onOpenDocument: (path: string, fragment: string | null) => Promise<boolean>;
+  export let onOpenDocument: (resource: ResourceRef, fragment: string | null) => Promise<boolean>;
   export let onJumpToLine: (line: number) => void;
   export let onSyncEditorLine: (line: number) => void = () => undefined;
   export let onCopySource: () => Promise<void> = async () => undefined;
@@ -44,9 +56,15 @@
   let previewMode: PreviewMode = 'article';
 
   let previewHost: HTMLElement;
+  let paneZoom: PaneZoom | null = null;
+  let paneZoomMobile = mobile;
+  let previewZoomScale = 1;
+  let zoomTabId = tabId;
   let resourceRevision = 0;
   let scheduledHtml: string | null = null;
-  let scheduledDocumentPath: string | null = null;
+  let scheduledDocumentResource: ResourceRef | null = null;
+  let fallbackDocumentResource: ResourceRef | null = null;
+  let previewResource: ResourceRef | null = null;
   let scheduledAllowLocalImages: boolean | null = null;
   let scheduledTabId: string | null = null;
   let scheduledRenderedRevision = -1;
@@ -95,12 +113,30 @@
   let diagramTypography = '';
 
   $: scrollController.setActive(tabId, contentRevision);
+  $: fallbackDocumentResource = documentPath === null ? null : desktopFile(documentPath);
+  $: previewResource = documentResource ?? fallbackDocumentResource;
   $: diagramTheme = settings.theme === 'system' ? (systemDark ? 'dark' : 'light') : settings.theme;
   $: diagramTypography = `${settings.previewFontFamily}\u0000${settings.previewFontSize}\u0000${settings.lineHeight}`;
+  $: if (tabId !== zoomTabId) {
+    zoomTabId = tabId;
+    paneZoom?.reset();
+  }
+  $: if (previewHost && previewMode === 'article' && (!paneZoom || paneZoomMobile !== mobile)) {
+    paneZoom?.dispose();
+    paneZoomMobile = mobile;
+    paneZoom = createPaneZoom(previewHost.parentElement ?? previewHost, previewHost, (scale) => {
+      previewZoomScale = scale;
+    }, { wheel: !mobile });
+  }
+  $: if (previewMode !== 'article' && paneZoom) {
+    paneZoom.dispose();
+    paneZoom = null;
+    previewZoomScale = 1;
+  }
 
   type PreviewPreparation = {
     html: string;
-    documentPath: string | null;
+    documentResource: ResourceRef | null;
     allowLocalImages: boolean;
     diagrams: DiagramSource[];
     diagramDiagnostics: DiagramDiagnostic[];
@@ -116,7 +152,7 @@
     try {
       await preparePreview(
         request.html,
-        request.documentPath,
+        request.documentResource,
         request.allowLocalImages,
         request.diagrams,
         request.diagramDiagnostics,
@@ -141,7 +177,7 @@
     !virtualPreview &&
     previewHost &&
     (html !== scheduledHtml ||
-      documentPath !== scheduledDocumentPath ||
+      previewResource !== scheduledDocumentResource ||
       settings.allowLocalImages !== scheduledAllowLocalImages ||
       tabId !== scheduledTabId ||
       renderedRevision !== scheduledRenderedRevision ||
@@ -151,7 +187,7 @@
       diagramTypography !== scheduledDiagramTypography)
   ) {
     scheduledHtml = html;
-    scheduledDocumentPath = documentPath;
+    scheduledDocumentResource = previewResource;
     scheduledAllowLocalImages = settings.allowLocalImages;
     scheduledTabId = tabId;
     scheduledRenderedRevision = renderedRevision;
@@ -159,7 +195,7 @@
     scheduledDiagramDiagnostics = diagramDiagnostics;
     scheduledDiagramTheme = diagramTheme;
     scheduledDiagramTypography = diagramTypography;
-    schedulePreviewPreparation(html, documentPath, settings.allowLocalImages, diagrams, diagramDiagnostics, diagramTheme);
+    schedulePreviewPreparation(html, previewResource, settings.allowLocalImages, diagrams, diagramDiagnostics, diagramTheme);
   }
 
   $: if (
@@ -181,7 +217,7 @@
       if (previewChunks) {
         void tick().then(() => {
           if (previewHost && previewChunks) {
-            rescalePreviewChunks(previewHost, previewChunks, true);
+            rescalePreviewChunks(previewHost, previewChunks, true, previewZoomScale);
             refreshPreviewScrollRange();
             if (committedSettled) scrollController.layoutReady();
           }
@@ -191,6 +227,9 @@
   }
 
   onDestroy(() => {
+    paneZoom?.dispose();
+    paneZoom = null;
+    codeHighlight.dispose();
     resourceRevision += 1;
     cancelActiveResourceJob();
     preparationQueue.dispose();
@@ -207,6 +246,16 @@
     revokeObjectUrls(displayedObjectUrls);
     displayedObjectUrls = [];
   });
+
+  export function refreshDiagrams(): void {
+    if (!previewHost || previewMode !== 'article') return;
+    if (activeVirtualPreview) {
+      desiredVirtualWindow = '';
+      requestVirtualWindow(previewSegmentAtPixel(virtualPrefix, previewHost.scrollTop), true);
+      return;
+    }
+    schedulePreviewPreparation(html, previewResource, settings.allowLocalImages, diagrams, diagramDiagnostics, diagramTheme);
+  }
 
   export function syncToEditorScroll(position: EditorScrollPosition | undefined, identity?: { tabId: string; contentRevision: number }) {
     if (!position) return;
@@ -251,7 +300,7 @@
         element.scrollIntoView({ block: 'start' });
         return true;
       }
-      previewHost.scrollTop += leaf.getBoundingClientRect().top - hostRect.top;
+      previewHost.scrollTop += (leaf.getBoundingClientRect().top - hostRect.top) / previewZoomScale;
       cancelAnimationFrame(scrollCorrectionFrame);
       scrollCorrectionFrame = requestAnimationFrame(() => {
         scrollCorrectionFrame = 0;
@@ -261,7 +310,7 @@
       });
       return true;
     }
-    previewHost.scrollTop += targetRect.top - hostRect.top + targetRect.height * fraction - 2;
+    previewHost.scrollTop += (targetRect.top - hostRect.top + targetRect.height * fraction) / previewZoomScale - 2;
     return true;
   }
 
@@ -340,7 +389,7 @@
         windowHtml + `<div class="preview-virtual-spacer" data-preview-bottom style="height:${bottom}px"></div>`;
       schedulePreviewPreparation(
         combinedHtml,
-        documentPath,
+        previewResource,
         settings.allowLocalImages,
         window.segments.flatMap((segment) => segment.diagrams),
         window.segments.flatMap((segment) => segment.diagramDiagnostics),
@@ -365,7 +414,9 @@
     if (!settings.syncScroll || !previewHost || renderedRevision !== contentRevision ||
       committedIdentity !== `${tabId}\u0000${renderedRevision}` ||
       (!previewPointerActive && performance.now() >= userPreviewScrollUntil)) return;
-    let line = sourceScrollMap ? findVisibleSourceBlockLine(sourceScrollMap, previewHost) : null;
+    let line = sourceScrollMap ? findVisibleSourceBlockLine(
+      sourceScrollMap, previewHost, previewZoomScale > 1 ? previewHost.parentElement ?? previewHost : previewHost
+    ) : null;
     if (line === null && activeVirtualPreview?.segments.length) {
       const index = previewSegmentAtPixel(virtualPrefix, previewHost.scrollTop);
       line = activeVirtualPreview.segments[index].startLine;
@@ -380,7 +431,7 @@
     for (const node of previewHost.querySelectorAll<HTMLElement>('[data-preview-segment]')) {
       const index = Number(node.dataset.previewSegment);
       if (!Number.isSafeInteger(index) || index < virtualWindowStart || index >= virtualWindowEnd) continue;
-      const height = Math.max(1, node.getBoundingClientRect().height);
+      const height = Math.max(1, node.getBoundingClientRect().height / previewZoomScale);
       if (Math.abs(virtualHeights[index] - height) > 0.5) {
         virtualHeights[index] = height;
         changed = true;
@@ -428,6 +479,7 @@
       scrollController.clear();
       cancelAnimationFrame(scrollCorrectionFrame);
     };
+    const markWheelScroll = (event: WheelEvent) => { if (!event.ctrlKey) markUserScroll(); };
     const startPointerScroll = () => {
       previewPointerActive = true;
       markUserScroll();
@@ -440,7 +492,7 @@
     const onKeyScroll = (event: KeyboardEvent) => {
       if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) markUserScroll();
     };
-    node.addEventListener('wheel', markUserScroll, { passive: true });
+    node.addEventListener('wheel', markWheelScroll, { passive: true });
     node.addEventListener('pointerdown', startPointerScroll, { passive: true });
     node.addEventListener('touchstart', startPointerScroll, { passive: true });
     node.addEventListener('keydown', onKeyScroll);
@@ -456,7 +508,7 @@
       if (previewChunks) {
         cancelAnimationFrame(chunkScaleFrame);
         chunkScaleFrame = requestAnimationFrame(() => {
-          if (previewChunks) rescalePreviewChunks(node, previewChunks);
+          if (previewChunks) rescalePreviewChunks(node, previewChunks, false, previewZoomScale);
           previewScrollRangeDirty = true;
           if (committedSettled) scrollController.layoutReady();
         });
@@ -473,10 +525,13 @@
     node.addEventListener('load', onResourceLayout, true);
     node.addEventListener('error', onResourceLayout, true);
     return { destroy: () => {
+      paneZoom?.dispose();
+      paneZoom = null;
+      previewZoomScale = 1;
       observer?.disconnect();
       node.removeEventListener('scroll', onScroll);
       node.removeEventListener('contentvisibilityautostatechange', onContentVisibility, true);
-      node.removeEventListener('wheel', markUserScroll);
+      node.removeEventListener('wheel', markWheelScroll);
       node.removeEventListener('pointerdown', startPointerScroll);
       node.removeEventListener('touchstart', startPointerScroll);
       node.removeEventListener('keydown', onKeyScroll);
@@ -494,7 +549,7 @@
 
   function markVisiblePreviewGroup(node: HTMLElement) {
     if (!previewChunks) return;
-    const rect = node.getBoundingClientRect();
+    const rect = (previewZoomScale > 1 ? node.parentElement ?? node : node).getBoundingClientRect();
     const element = document.elementFromPoint?.(rect.left + rect.width / 2, rect.top + rect.height / 2);
     const group = element instanceof Element ? element.closest<HTMLElement>('.preview-chunk-group') : null;
     if (group && node.contains(group)) previewChunks.seenGroups.add(group);
@@ -538,7 +593,7 @@
       if (previewChunks) {
         const align = () => {
           if (!previewHost?.contains(target)) return;
-          previewHost.scrollTop += target.getBoundingClientRect().top - previewHost.getBoundingClientRect().top - 12;
+          previewHost.scrollTop += (target.getBoundingClientRect().top - previewHost.getBoundingClientRect().top) / previewZoomScale - 12;
         };
         align();
         requestAnimationFrame(() => {
@@ -612,7 +667,7 @@
     event.preventDefault();
 
     try {
-      const resolved = await api.resolveMarkdownTarget(documentPath, href);
+      const resolved = await resourceLinks.resolve(previewResource, href);
       await executeMarkdownTarget(resolved, settings.confirmExternalLinks, {
         scrollToFragment,
         openDocument: onOpenDocument,
@@ -633,7 +688,7 @@
 
   function schedulePreviewPreparation(
     currentHtml: string,
-    currentDocumentPath: string | null,
+    currentDocumentResource: ResourceRef | null,
     allowLocalImages: boolean,
     currentDiagrams: DiagramSource[],
     currentDiagramDiagnostics: DiagramDiagnostic[],
@@ -648,7 +703,7 @@
     activeResourceJobId = jobId;
     void preparationQueue.submit({
       html: currentHtml,
-      documentPath: currentDocumentPath,
+      documentResource: currentDocumentResource,
       allowLocalImages,
       diagrams: currentDiagrams,
       diagramDiagnostics: currentDiagramDiagnostics,
@@ -663,7 +718,7 @@
 
   async function preparePreview(
     currentHtml: string,
-    currentDocumentPath: string | null,
+    currentDocumentResource: ResourceRef | null,
     allowLocalImages: boolean,
     currentDiagrams: DiagramSource[],
     currentDiagramDiagnostics: DiagramDiagnostic[],
@@ -712,7 +767,7 @@
     }
     commitPreparedPreview(loadingTemplate.innerHTML, revision, [], false, false);
 
-    const objectUrls = await prepareLocalImages(images, currentDocumentPath, revision, jobId);
+    const objectUrls = await prepareLocalImages(images, currentDocumentResource, revision, jobId);
     commitPreparedPreview(template.innerHTML, revision, objectUrls);
   }
 
@@ -739,9 +794,11 @@
       applyDiagramResults(template, currentDiagrams, batch.artifacts, batch.diagnostics);
     } catch (error) {
       if (revision !== resourceRevision) return currentHtml;
-      const message = error instanceof Error ? error.message : String(error);
+      const appError = toAppError(error);
+      const packError = appError.code === 'DIAGRAM_RUNTIME_UNAVAILABLE' || appError.code === 'DIAGRAM_RUNTIME_INVALID';
+      const message = packError ? localizeError(appError) : appError.message;
       applyDiagramResults(template, currentDiagrams, [], currentDiagrams.map((source) => ({
-        code: 'DIAGRAM_RUNTIME_CRASHED',
+        code: packError ? appError.code : 'DIAGRAM_RUNTIME_CRASHED',
         diagramId: source.diagramId,
         sourceStartByte: source.sourceStartByte,
         sourceEndByte: source.sourceEndByte,
@@ -857,7 +914,7 @@
 
   async function prepareLocalImages(
     images: HTMLImageElement[],
-    currentDocumentPath: string | null,
+    currentDocumentResource: ResourceRef | null,
     revision: number,
     jobId: string
   ): Promise<string[]> {
@@ -875,7 +932,7 @@
     const sources = [...grouped.keys()];
     let pendingObjectUrls: string[] = [];
     try {
-      const batch = await api.loadLocalImages(currentDocumentPath, sources, jobId);
+      const batch = await resourceLinks.images(currentDocumentResource, sources, jobId);
       pendingObjectUrls = batch.objectUrls;
       if (revision !== resourceRevision) {
         revokeObjectUrls(batch.objectUrls);
@@ -901,8 +958,10 @@
           image.title = entry.resource.path;
           image.setAttribute('loading', 'lazy');
           image.setAttribute('decoding', 'async');
-          if (!image.hasAttribute('width')) image.width = entry.resource.width;
-          if (!image.hasAttribute('height')) image.height = entry.resource.height;
+          if (!image.hasAttribute('width') && !image.hasAttribute('height')) {
+            image.width = entry.resource.width;
+            image.height = entry.resource.height;
+          }
           image.src = entry.resource.objectUrl;
         }
       }
@@ -926,7 +985,7 @@
   function cancelActiveResourceJob() {
     const jobId = activeResourceJobId;
     activeResourceJobId = null;
-    if (jobId) void api.cancelLocalImageJob(jobId).catch(() => undefined);
+    if (jobId) void resourceLinks.cancelImages(jobId).catch(() => undefined);
   }
 
   function commitPreparedPreview(
@@ -961,7 +1020,7 @@
       renderedNodes = nextNodes;
       if (chunks) {
         previewChunks = chunks;
-        measurePreviewChunks(previewHost, chunks);
+        measurePreviewChunks(previewHost, chunks, previewZoomScale);
         chunkSeenFrame = requestAnimationFrame(() => {
           chunkSeenFrame = 0;
           markVisiblePreviewGroup(previewHost);
@@ -977,6 +1036,7 @@
     }
     if (virtualScrollTop !== null) previewHost.scrollTop = virtualScrollTop;
     committedHtml = nextHtml;
+    codeHighlight.update(previewHost);
     committedWithoutImages = withoutImages;
     committedIdentity = `${tabId}\u0000${renderedRevision}`;
     committedSettled = settled;
@@ -1099,12 +1159,15 @@
     {/if}
   </nav>
 
+  <MarkdownDiagnostics diagnostics={markdownDiagnostics} {onJumpToLine} />
+
   <div class="preview-body">
     {#if previewMode === 'mindMap' && MindMapPane}
       <svelte:component
         this={MindMapPane}
         {documentTitle}
         {outline}
+        {mobile}
         {onJumpToLine}
       />
     {:else}

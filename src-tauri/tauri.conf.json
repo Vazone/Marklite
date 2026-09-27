@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "MarkLite",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "identifier": "com.marklite.editor",
   "mainBinaryName": "marklite",
   "build": {
@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'sha256-WB7X10vZBI0OOpE2OSfXLvIpQtdyJUayf3zCnjU5Drg=' 'sha256-dIkMQvfbokiBwfzuAUf7xXeFuCOJmB0M1Hb+grFQS8w='"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'sha256-WB7X10vZBI0OOpE2OSfXLvIpQtdyJUayf3zCnjU5Drg=' 'sha256-HxdGlZHGoi9CYr9pXMnRGKhsBDcC+apxO/dyxPKBu8w='"
     }
   },
   "bundle": {
@@ -52,8 +52,21 @@
         "installerIcon": "icons/icon.ico",
         "uninstallerIcon": "icons/icon.ico",
         "installMode": "currentUser",
-        "languages": ["English"],
+        "languages": [
+          "English"
+        ],
         "displayLanguageSelector": false
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlDQzA3RUYyOEQ1OTBDQjAKUldTd0RGbU44bjdBbkVBWHA5ZHA2Q013UVpnNmQ5UDlxU1JZQnd5RjBCcGNjaFlZUG8wM29MaDEK",
+      "endpoints": [
+        "https://github.com/Vazone/Marklite/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

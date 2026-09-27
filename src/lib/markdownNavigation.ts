@@ -1,8 +1,9 @@
 import type { MarkdownTargetDto } from './tauriApi';
+import { documentResource, type ResourceRef } from './platform/resources';
 
 export type MarkdownNavigationHandlers = {
   scrollToFragment: (fragment: string) => void;
-  openDocument: (path: string, fragment: string | null) => Promise<boolean>;
+  openDocument: (resource: ResourceRef, fragment: string | null) => Promise<boolean>;
   confirmExternal: (url: string) => boolean;
   openExternal: (url: string) => Promise<void>;
   openEmail: (address: string) => Promise<void>;
@@ -18,7 +19,8 @@ export async function executeMarkdownTarget(
     return true;
   }
   if (target.kind === 'localDocument') {
-    return handlers.openDocument(target.path, target.fragment);
+    const resource = documentResource(target);
+    return resource ? handlers.openDocument(resource, target.fragment) : false;
   }
   const externalTarget = target.kind === 'email' ? `mailto:${target.address}` : target.url;
   if (confirmExternalLinks && !handlers.confirmExternal(externalTarget)) {

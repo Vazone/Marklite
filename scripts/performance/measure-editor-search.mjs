@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { EditorState } from '@codemirror/state';
+import { startEditorSearch } from '../../src/lib/editorSearchTask.ts';
 import {
   editorSearchReplacementChange,
   findEditorSearchMatches,
@@ -14,7 +15,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '.
 const outputIndex = process.argv.indexOf('--output');
 const outputPath = outputIndex >= 0
   ? resolve(process.argv[outputIndex + 1])
-  : resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'editor-search.json');
+  : resolve(repositoryRoot, 'local', 'verification', 'performance', 'editor-search.json');
 const sampleCount = 30;
 
 function percentile(values, percent) {
@@ -43,6 +44,21 @@ function measure(operation) {
   return summarize(values);
 }
 
+async function measureScheduled(doc, expected) {
+  const run = () => new Promise(resolve => startEditorSearch(doc, 'a', matches => {
+    if (matches.length !== expected) throw new Error('Scheduled search lost matches');
+    resolve();
+  }));
+  for (let index = 0; index < 3; index++) await run();
+  const values = [];
+  for (let index = 0; index < sampleCount; index++) {
+    const started = performance.now();
+    await run();
+    values.push(performance.now() - started);
+  }
+  return summarize(values);
+}
+
 const heapBeforeBytes = process.memoryUsage().heapUsed;
 const cases = [];
 for (const size of [1_000, 10_000, 150_000]) {
@@ -66,7 +82,8 @@ for (const size of [1_000, 10_000, 150_000]) {
     const change = editorSearchReplacementChange(initial.doc, matches, 'b');
     if (!change || change.insert.length !== size) throw new Error(`replace-all lost content at ${size}`);
   });
-  cases.push({ size, matchCount: matches.length, scan, incrementalUpdate, visibleDecorations, replaceAll });
+  const scheduledScan = await measureScheduled(initial.doc, size);
+  cases.push({ size, matchCount: matches.length, scan, scheduledScan, incrementalUpdate, visibleDecorations, replaceAll });
 }
 const heapAfterBytes = process.memoryUsage().heapUsed;
 
@@ -76,7 +93,8 @@ const result = {
   methodology: {
     runtime: 'Node imports the production TypeScript module directly; three warmups precede 30 timed samples',
     scan: 'case-insensitive literal RegExpCursor scan without Text.toString()',
-    incrementalUpdate: 'append one matching character, map complete results, and rescan query-sized context',
+    scheduledScan: 'production cancellable scan; Node timer timing is not WebView2 timer timing',
+    incrementalUpdate: 'historical synchronous helper, no longer the GUI edit path; append one matching character and map complete results',
     visibleDecorations: 'binary-search one 80-code-unit viewport plus one active off-screen match',
     replaceAll: 'build one content-preserving replacement span for all matches',
     memory: 'process heap snapshots are observational and do not force garbage collection'

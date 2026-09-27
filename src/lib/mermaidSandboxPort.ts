@@ -1,5 +1,5 @@
 import type { DiagramSource } from './platform/contracts';
-import { normalizeMermaidSvgDocument } from '../shared/mermaidSvgNormalization.mjs';
+import normalizationScript from '../shared/mermaidSvgNormalization.mjs?raw';
 import type {
   DiagramExecution,
   DiagramExecutionPort,
@@ -117,6 +117,7 @@ export class MermaidSandboxPort implements DiagramExecutionPort {
     return new Promise((resolve, reject) => {
       const frame = this.documentRoot.createElement('iframe');
       let settled = false;
+      let channel: MessageChannel | null = null;
       const clearPendingFrame = () => {
         if (this.pendingFrame === frame) this.pendingFrame = null;
         if (this.rejectPendingFrame === fail) this.rejectPendingFrame = null;
@@ -125,6 +126,11 @@ export class MermaidSandboxPort implements DiagramExecutionPort {
         if (settled) return;
         settled = true;
         clearPendingFrame();
+        if (channel) {
+          channel.port1.onmessage = null;
+          channel.port1.close();
+          channel.port2.close();
+        }
         frame.remove();
         reject(error);
       };
@@ -145,7 +151,7 @@ export class MermaidSandboxPort implements DiagramExecutionPort {
             fail();
             return;
           }
-          const channel = new MessageChannel();
+          channel = new MessageChannel();
           const pending = new Map<number, PendingRender>();
           const surface: Surface = { frame, port: channel.port1, pending };
           channel.port1.onmessage = (event: MessageEvent<unknown>) => {
@@ -188,6 +194,7 @@ export class MermaidSandboxPort implements DiagramExecutionPort {
     this.surface = null;
     this.surfacePromise = null;
     if (!surface) return;
+    surface.port.onmessage = null;
     surface.port.close();
     surface.frame.remove();
     for (const pending of surface.pending.values()) pending.reject(error);
@@ -200,14 +207,14 @@ export function buildMermaidSandboxDocument(runtimeScript: string): string {
     .replaceAll('</script', '<\\/script')
     .replaceAll('\u2028', '\\u2028')
     .replaceAll('\u2029', '\\u2029');
-  const normalizationSource = normalizeMermaidSvgDocument.toString();
+  const normalizationSource = normalizationScript.replace(/\r\n?/g, '\n').replaceAll('export function', 'function').trim();
   return `<!doctype html>
 <html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"></head>
 <body><script>${escapedRuntime}</script><script>
 (() => {
   'use strict';
   let channel = null;
-  const normalizeMermaidSvgDocument = ${normalizationSource};
+  ${normalizationSource}
   const initialize = (theme, fontFamily, fontSize) => globalThis.mermaid.initialize({
     startOnLoad: false,
     securityLevel: 'strict',
@@ -244,8 +251,7 @@ export function buildMermaidSandboxDocument(runtimeScript: string): string {
         document.body.style.lineHeight = String(lineHeight);
         initialize(request.theme, fontFamily, fontSize);
         const rendered = await globalThis.mermaid.render('marklite-diagram-' + request.requestId, request.source);
-        const parsed = new DOMParser().parseFromString(rendered.svg, 'image/svg+xml');
-        const root = normalizeMermaidSvgDocument(parsed.documentElement);
+        const root = normalizeMermaidSvgDocument(parseMermaidSvgDocument(rendered.svg));
         const safeSvg = new XMLSerializer().serializeToString(root);
         const viewBox = (root.getAttribute('viewBox') || '').trim().split(/[\\s,]+/).map(Number);
         if (viewBox.length !== 4 || viewBox.some((value) => !Number.isFinite(value))) throw new Error('Mermaid SVG has no finite viewBox');

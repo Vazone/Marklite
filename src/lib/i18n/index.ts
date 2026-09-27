@@ -57,9 +57,9 @@ const errorKeys = new Set<MessageKey>(
   Object.keys(enMessages).filter((key): key is MessageKey => key.startsWith('error.'))
 );
 
-export function localizeError(error: AppError): string {
+export function localizeError(error: AppError, translateError: Translator = t): string {
   const key = `error.${error.code}` as MessageKey;
   return errorKeys.has(key)
-    ? t(key)
-    : t('error.generic', { code: error.code || 'UNKNOWN_ERROR' });
+    ? translateError(key)
+    : translateError('error.generic', { code: error.code || 'UNKNOWN_ERROR' });
 }

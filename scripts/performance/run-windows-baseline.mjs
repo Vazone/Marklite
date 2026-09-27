@@ -1,3 +1,4 @@
+import { CdpClient } from '../native/cdp.mjs';
 import { createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -8,33 +9,36 @@ import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
+import { verifyEditorSearch } from './verify-editor-search.mjs';
+import { verifyDocumentResidency } from './verify-document-residency.mjs';
+import { verifyScrollFeedback } from './verify-scroll-feedback.mjs';
 
 const execFileAsync = promisify(execFile);
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const corpusDirectory = resolve(repositoryRoot, 'tmp', 'performance-corpus');
 const manifestPath = resolve(repositoryRoot, 'scripts', 'fixtures', 'performance-corpus-manifest.json');
 const executablePath = resolve(repositoryRoot, 'src-tauri', 'target', 'release', 'marklite.exe');
-const defaultOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'windows-reference.json');
-const defaultSearchOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'dense-search.json');
-const defaultMindMapOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'mind-map-webview.json');
-const defaultInteractionOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'analysis-interaction.json');
-const defaultLiveSplitOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'live-split.json');
-const defaultLiveSplitMixedOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'live-split-mixed.json');
-const defaultLiveSplitIpcOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'live-split-ipc.json');
-const defaultLiveSplitReleaseOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'live-split-release.json');
-const defaultLiveSplitScrollOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'live-split-scroll.json');
-const defaultLiveSplitInputOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'live-split-input.json');
-const defaultLiveSplitOrdinaryOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'live-split-ordinary.json');
-const defaultLiveSplitPreviewOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'live-split-preview.json');
-const defaultLiveSplitTraceOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'live-split-trace.json');
-const defaultLiveSplitArticleOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'live-split-article.json');
-const defaultExtensionOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'extension-ipc.json');
-const defaultExtensionDiagramsOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'extension-diagrams.json');
-const defaultExtensionExportsOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'extension-exports.json');
-const defaultExtensionStartupOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'extension-startup.json');
-const defaultPreviewResourceOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'preview-resources.json');
-const defaultPdfResourceOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'pdf-resource-isolation.json');
-const defaultExportSemanticsOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'results', 'export-semantics.json');
+const defaultOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'windows-reference.json');
+const defaultSearchOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'dense-search.json');
+const defaultMindMapOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'mind-map-webview.json');
+const defaultInteractionOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'analysis-interaction.json');
+const defaultLiveSplitOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'live-split.json');
+const defaultLiveSplitMixedOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'live-split-mixed.json');
+const defaultLiveSplitIpcOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'live-split-ipc.json');
+const defaultLiveSplitReleaseOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'live-split-release.json');
+const defaultLiveSplitScrollOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'live-split-scroll.json');
+const defaultLiveSplitInputOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'live-split-input.json');
+const defaultLiveSplitOrdinaryOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'live-split-ordinary.json');
+const defaultLiveSplitPreviewOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'live-split-preview.json');
+const defaultLiveSplitTraceOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'live-split-trace.json');
+const defaultLiveSplitArticleOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'live-split-article.json');
+const defaultExtensionOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'extension-ipc.json');
+const defaultExtensionDiagramsOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'extension-diagrams.json');
+const defaultExtensionExportsOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'extension-exports.json');
+const defaultExtensionStartupOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'extension-startup.json');
+const defaultPreviewResourceOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'preview-resources.json');
+const defaultPdfResourceOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'pdf-resource-isolation.json');
+const defaultExportSemanticsOutput = resolve(repositoryRoot, 'local', 'verification', 'performance', 'export-semantics.json');
 let startupSamples = 30;
 let operationSamples = 30;
 
@@ -62,7 +66,9 @@ function parseArguments(argv) {
   const corpusLimitIndex = argv.indexOf('--corpus-limit');
   const liveSplitCaseIndex = argv.indexOf('--live-split-case');
   const extensionDiagramCaseIndex = argv.indexOf('--extension-diagram-case');
-  const searchOnly = argv.includes('--search-only');
+  const searchOnly = argv.includes('--search-only') || argv.includes('--search-semantics');
+  const searchCorpusIndex = argv.indexOf('--search-corpus');
+  const searchQueryIndex = argv.indexOf('--search-query');
   const mindMapOnly = argv.includes('--mind-map-only');
   const interactionOnly = argv.includes('--interaction-only');
   const liveSplitOnly = argv.includes('--live-split-only');
@@ -142,6 +148,8 @@ function parseArguments(argv) {
     corpusLimit: corpusLimitIndex >= 0 ? Number(argv[corpusLimitIndex + 1]) : null,
     liveSplitCase: liveSplitCaseIndex >= 0 ? argv[liveSplitCaseIndex + 1] : null,
     searchOnly,
+    searchCorpus: searchCorpusIndex >= 0 ? argv[searchCorpusIndex + 1] : null,
+    searchQuery: searchQueryIndex >= 0 ? argv[searchQueryIndex + 1] : 'SEARCH_TARGET',
     mindMapOnly,
     interactionOnly,
     liveSplitOnly,
@@ -209,61 +217,6 @@ async function waitForTargets(port, timeoutMs = 30_000) {
     await new Promise((resolveWait) => setTimeout(resolveWait, 25));
   }
   throw new Error(`Timed out waiting for WebView2 CDP on port ${port}`);
-}
-
-class CdpClient {
-  constructor(url) {
-    this.socket = new WebSocket(url);
-    this.nextId = 1;
-    this.pending = new Map();
-  }
-
-  async connect() {
-    await new Promise((resolveConnect, reject) => {
-      this.socket.addEventListener('open', resolveConnect, { once: true });
-      this.socket.addEventListener('error', reject, { once: true });
-    });
-    this.socket.addEventListener('message', (event) => {
-      const message = JSON.parse(String(event.data));
-      if (!message.id) return;
-      const pending = this.pending.get(message.id);
-      if (!pending) return;
-      this.pending.delete(message.id);
-      if (message.error) pending.reject(new Error(message.error.message));
-      else pending.resolve(message.result);
-    });
-  }
-
-  send(method, params = {}, timeoutMs = 30_000) {
-    const id = this.nextId++;
-    return new Promise((resolveSend, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`CDP ${method} timed out after ${timeoutMs} ms`));
-      }, timeoutMs);
-      this.pending.set(id, {
-        resolve: (value) => { clearTimeout(timer); resolveSend(value); },
-        reject: (error) => { clearTimeout(timer); reject(error); }
-      });
-      this.socket.send(JSON.stringify({ id, method, params }));
-    });
-  }
-
-  async evaluate(expression, awaitPromise = true, timeoutMs = 30_000) {
-    const result = await this.send('Runtime.evaluate', {
-      expression,
-      awaitPromise,
-      returnByValue: true
-    }, timeoutMs);
-    if (result.exceptionDetails) {
-      throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
-    }
-    return result.result.value;
-  }
-
-  close() {
-    this.socket.close();
-  }
 }
 
 async function processResources(pid) {
@@ -397,7 +350,8 @@ async function terminateChild(child) {
   }
 }
 
-async function launch(executable, corpusPath, port, runtimeDirectory, webviewDirectory = resolve(runtimeDirectory, 'webview2'), onSpawn) {
+async function launch(executable, corpusPath, runtimeDirectory, webviewDirectory = resolve(runtimeDirectory, 'webview2'), onSpawn) {
+  const port = await unusedLoopbackPort();
   const startedAt = performance.now();
   const child = spawn(executable, [corpusPath], {
     cwd: repositoryRoot,
@@ -406,7 +360,7 @@ async function launch(executable, corpusPath, port, runtimeDirectory, webviewDir
       MARKLITE_BENCHMARK_MODE: '1',
       MARKLITE_BENCHMARK_DATA_DIR: resolve(runtimeDirectory, 'appdata'),
       WEBVIEW2_USER_DATA_FOLDER: webviewDirectory,
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port} --remote-debugging-address=127.0.0.1`
     },
     stdio: 'ignore',
     windowsHide: false
@@ -931,7 +885,7 @@ async function measureLiveSplitInputPatterns(client) {
   return { ime, paste, bulk, postInputDrag, burst };
 }
 
-async function measureDenseSearch(client) {
+async function measureDenseSearch(client, query = 'SEARCH_TARGET', profileEdit = false) {
   process.stdout.write('dense search: open panel\n');
   await client.send('Runtime.enable');
   await client.evaluate(`(() => {
@@ -985,10 +939,14 @@ async function measureDenseSearch(client) {
     });
   })()`, false);
   process.stdout.write('dense search: collect matches\n');
-  await client.send('Input.insertText', { text: 'SEARCH_TARGET' });
+  await client.send('Input.insertText', { text: query });
   const search = await client.evaluate('window.__markliteSearchReady');
 
   process.stdout.write('dense search: edit with results active\n');
+  if (profileEdit) {
+    await client.send('Profiler.enable');
+    await client.send('Profiler.start');
+  }
   const box = await client.evaluate(`(() => {
     const rect = document.querySelector('.cm-content').getBoundingClientRect();
     return { x: rect.left + Math.min(40, rect.width / 2), y: rect.top + Math.min(40, rect.height / 2) };
@@ -1030,8 +988,16 @@ async function measureDenseSearch(client) {
   })()`, false);
   await client.send('Input.insertText', { text: 'x' });
   const edit = await client.evaluate('window.__markliteSearchEdit');
+  const profile = profileEdit ? (await client.send('Profiler.stop')).profile : undefined;
   process.stdout.write('dense search: scroll\n');
   const scroll = await measureFrames(client, '.cm-scroller', 'scroll', 10);
+  await client.evaluate(`(async () => {
+    const deadline = performance.now() + 30000;
+    while (document.querySelector('.find-input-shell')?.getAttribute('aria-busy') === 'true') {
+      if (performance.now() >= deadline) throw new Error('Search did not settle after editing');
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  })()`);
   const runtime = await client.evaluate(`(() => ({
     errors: window.__markliteSearchErrors,
     usedJsHeapBytes: performance.memory?.usedJSHeapSize ?? null,
@@ -1039,7 +1005,7 @@ async function measureDenseSearch(client) {
     decorations: document.querySelectorAll('.cm-searchMatch').length,
     counter: document.querySelector('.find-input-shell span')?.textContent ?? ''
   }))()`);
-  return { search, edit, scroll, runtime };
+  return { search, edit, scroll, runtime, profile };
 }
 
 async function measureNativeRender(client, content) {
@@ -1517,7 +1483,7 @@ async function main() {
     for (let index = 0; index < options.startupSamples; index += 1) {
       let run;
       try {
-        run = await launch(options.executable, resolve(corpusDirectory, 'representative-10-kib.md'), await unusedLoopbackPort(), runtimeDirectory, resolve(runtimeDirectory, `webview2-startup-${index}`));
+        run = await launch(options.executable, resolve(corpusDirectory, 'representative-10-kib.md'), runtimeDirectory, resolve(runtimeDirectory, `webview2-startup-${index}`));
         result.rawMs.push(run.startupMs);
         if (index === 0) {
           result.userAgent = run.ready.userAgent;
@@ -1568,7 +1534,7 @@ async function main() {
     };
     let run;
     try {
-      run = await launch(options.executable, fixturePath, 9380, runtimeDirectory, resolve(runtimeDirectory, 'webview2-gui'));
+      run = await launch(options.executable, fixturePath, runtimeDirectory, resolve(runtimeDirectory, 'webview2-gui'));
       result.install = await run.client.evaluate(`window.__TAURI_INTERNALS__.invoke('install_diagram_runtime', { packPath: ${JSON.stringify(packPath)} })`, true, 30000);
       for (const format of formats) {
         const requests = Array.from({ length: options.operationSamples }, (_, index) => ({
@@ -1683,7 +1649,7 @@ async function main() {
     };
     let run;
     try {
-      run = await launch(options.executable, resolve(corpusDirectory, 'representative-10-kib.md'), 9370, runtimeDirectory);
+      run = await launch(options.executable, resolve(corpusDirectory, 'representative-10-kib.md'), runtimeDirectory);
       await selectLayout(run.client, 'edit');
       for (const [name, source] of Object.entries(cases)) {
         const bytes = Buffer.byteLength(source);
@@ -1768,7 +1734,7 @@ async function main() {
     };
     let installer;
     try {
-      installer = await launch(options.executable, resolve(corpusDirectory, 'representative-10-kib.md'), 9371, runtimeDirectory, resolve(runtimeDirectory, 'webview2-install'));
+      installer = await launch(options.executable, resolve(corpusDirectory, 'representative-10-kib.md'), runtimeDirectory, resolve(runtimeDirectory, 'webview2-install'));
       result.install = await installer.client.evaluate(`window.__TAURI_INTERNALS__.invoke('install_diagram_runtime', { packPath: ${JSON.stringify(packPath)} })`, true, 30000);
     } finally {
       if (installer) await stop(installer);
@@ -1782,7 +1748,7 @@ async function main() {
       let run;
       const started = performance.now();
       try {
-        run = await launch(options.executable, fixtures[name].path, 9372 + index, runtimeDirectory, resolve(runtimeDirectory, `webview2-${name}`));
+        run = await launch(options.executable, fixtures[name].path, runtimeDirectory, resolve(runtimeDirectory, `webview2-${name}`));
         const browserEvents = [];
         result.cases[name] = { browserEvents };
         run.client.socket.addEventListener('message', (event) => {
@@ -1991,7 +1957,7 @@ async function main() {
       toolchain
     };
     try {
-      run = await launch(options.executable, resolve(corpusDirectory, name), 9368, runtimeDirectory);
+      run = await launch(options.executable, resolve(corpusDirectory, name), runtimeDirectory);
       await selectLayout(run.client, 'split');
       result.article = await run.client.evaluate(`(async () => {
         const host = document.querySelector('.preview-content');
@@ -2128,7 +2094,7 @@ async function main() {
       toolchain
     };
     try {
-      run = await launch(options.executable, resolve(corpusDirectory, name), 9369, runtimeDirectory);
+      run = await launch(options.executable, resolve(corpusDirectory, name), runtimeDirectory);
       if (!['edit', 'split'].includes(options.traceLayout)) throw new Error('Invalid --trace-layout');
       await selectLayout(run.client, options.traceLayout);
       if (options.tracePreviewContain) {
@@ -2288,7 +2254,7 @@ async function main() {
       if (!file) throw new Error(`Missing corpus manifest entry: ${name}`);
       let run;
       try {
-        run = await launch(options.executable, resolve(corpusDirectory, name), 9390 + index, runtimeDirectory);
+        run = await launch(options.executable, resolve(corpusDirectory, name), runtimeDirectory);
         await selectLayout(run.client, 'preview');
         const frames = await measureFrames(run.client, '.preview-content', 'scroll', options.operationSamples);
         result.cases[name] = {
@@ -2326,7 +2292,7 @@ async function main() {
       corpus: file
     };
     try {
-      run = await launch(options.executable, resolve(corpusDirectory, name), 9380, runtimeDirectory);
+      run = await launch(options.executable, resolve(corpusDirectory, name), runtimeDirectory);
       result.environment = await run.client.evaluate(`(() => ({
         userAgent: navigator.userAgent,
         devicePixelRatio: window.devicePixelRatio,
@@ -2426,7 +2392,7 @@ async function main() {
       if (!file) throw new Error(`Missing corpus manifest entry: ${name}`);
       let run;
       try {
-        run = await launch(options.executable, resolve(corpusDirectory, name), 9370 + index, runtimeDirectory);
+        run = await launch(options.executable, resolve(corpusDirectory, name), runtimeDirectory);
         await selectLayout(run.client, 'split');
         result.cases[name] = { bytes: file.bytes, sha256: file.sha256, ...(await measureLiveSplitInputPatterns(run.client)) };
       } catch (error) {
@@ -2459,7 +2425,7 @@ async function main() {
     };
     let run;
     try {
-      run = await launch(options.executable, resolve(corpusDirectory, name), 9360, runtimeDirectory);
+      run = await launch(options.executable, resolve(corpusDirectory, name), runtimeDirectory);
       await selectLayout(run.client, 'split');
       for (const [widthPercent, fontPx] of [[30, 14], [50, 14], [70, 14], [50, 20]]) {
         const key = `${widthPercent}-${fontPx}`;
@@ -2519,7 +2485,7 @@ async function main() {
       result.scenarios['50-14-delayed-image'] = await measureScrollAlignment(run.client, 50, 14);
       await stop(run);
       run = undefined;
-      run = await launch(options.executable, resolve(corpusDirectory, 'scroll-fold-markers-1000.md'), 9361, runtimeDirectory);
+      run = await launch(options.executable, resolve(corpusDirectory, 'scroll-fold-markers-1000.md'), runtimeDirectory);
       await selectLayout(run.client, 'split');
       result.fold = { before: await measureScrollAlignment(run.client, 50, 14) };
       result.fold.action = await run.client.evaluate(`(async () => {
@@ -2536,7 +2502,7 @@ async function main() {
       result.fold.after = await measureScrollAlignment(run.client, 50, 14);
       await stop(run);
       run = undefined;
-      const settingsRun = await launch(options.executable, resolve(corpusDirectory, 'representative-10-kib.md'), 9362, runtimeDirectory);
+      const settingsRun = await launch(options.executable, resolve(corpusDirectory, 'representative-10-kib.md'), runtimeDirectory);
       try {
         await settingsRun.client.evaluate(`(async () => {
           const invoke = window.__TAURI_INTERNALS__.invoke;
@@ -2547,7 +2513,7 @@ async function main() {
         await stop(settingsRun);
       }
       const imageFixture = await createImageScrollFixture(runtimeDirectory);
-      run = await launch(options.executable, imageFixture.markdownPath, 9363, runtimeDirectory);
+      run = await launch(options.executable, imageFixture.markdownPath, runtimeDirectory);
       await selectLayout(run.client, 'split');
       result.localImage = {
         fixture: imageFixture,
@@ -2603,7 +2569,7 @@ async function main() {
       if (!file) throw new Error(`Missing corpus manifest entry: ${name}`);
       let run;
       try {
-        run = await launch(options.executable, resolve(corpusDirectory, name), 9350 + index, runtimeDirectory);
+        run = await launch(options.executable, resolve(corpusDirectory, name), runtimeDirectory);
         await selectLayout(run.client, 'split');
         const measured = await measureDividerRelease(run.client, options.operationSamples);
         result.cases[name] = {
@@ -2657,7 +2623,7 @@ async function main() {
       }
       let run;
       try {
-        run = await launch(options.executable, resolve(corpusDirectory, 'representative-10-kib.md'), 9340 + index, runtimeDirectory);
+        run = await launch(options.executable, resolve(corpusDirectory, 'representative-10-kib.md'), runtimeDirectory);
         await selectLayout(run.client, 'edit');
         const measured = await measureLiveSplitIpc(run.client, source.toString('utf8'), options.operationSamples);
         result.cases[name] = {
@@ -2685,7 +2651,7 @@ async function main() {
   }
   if (options.liveSplitOnly) {
     const smallCorpus = resolve(corpusDirectory, 'representative-10-kib.md');
-    const settingsRun = await launch(options.executable, smallCorpus, 9330, runtimeDirectory);
+    const settingsRun = await launch(options.executable, smallCorpus, runtimeDirectory);
     try {
       await settingsRun.client.evaluate(`(async () => {
         const invoke = window.__TAURI_INTERNALS__.invoke;
@@ -2716,7 +2682,7 @@ async function main() {
         previewConvergence: 'trusted CDP insertion to changed preview text and two animation frames; 12 second timeout is failure',
         divider: 'trusted pointer drag through production separator',
         samples: options.operationSamples,
-        boundary: '10 MiB virtual preview acceptance; sampled process working sets are not continuous peaks'
+        boundary: 'virtual preview acceptance; sampled process working sets are not continuous peaks'
       },
       artifact: { name: basename(options.executable), sha256: createHash('sha256').update(executable).digest('hex'), bytes: executable.byteLength },
       toolchain,
@@ -2730,8 +2696,8 @@ async function main() {
       let resourceSampler;
       let stage = 'launch';
       try {
-        run = await launch(options.executable, resolve(corpusDirectory, name), 9331 + index, runtimeDirectory,
-          resolve(runtimeDirectory, 'webview2'), name === 'representative-10-mib.md'
+        run = await launch(options.executable, resolve(corpusDirectory, name), runtimeDirectory,
+          resolve(runtimeDirectory, 'webview2'), ['representative-500-kib.md', 'mixed-500-kib.md', 'representative-10-mib.md'].includes(name)
             ? (child) => { resourceSampler = startProcessTreeSampler(child.pid); }
             : undefined);
         stage = 'edit';
@@ -2750,7 +2716,7 @@ async function main() {
           editorScrollHeight: document.querySelector('.cm-scroller')?.scrollHeight ?? null,
           devicePixelRatio: window.devicePixelRatio
         }))()`);
-        const virtualViewport = name === 'representative-10-mib.md'
+        const virtualViewport = await run.client.evaluate("Boolean(document.querySelector('.preview-content.virtual-preview'))")
           ? await measureVirtualPreviewViewport(run.client, run.child.pid)
           : null;
         const sampledResources = resourceSampler ? await resourceSampler.stop() : null;
@@ -2769,7 +2735,9 @@ async function main() {
             dividerP99AtMost50Ms: percentile(divider.frames, 0.99) <= 50,
             ...(virtualViewport ? {
               virtualWindowNodesAtMost10000: virtualViewport.checkpoints.every((checkpoint) => checkpoint.nodes <= 10_000),
-              virtualWindowNeverBlank: virtualViewport.checkpoints.every((checkpoint) => checkpoint.visibleSegments > 0),
+              virtualWindowNeverBlank: virtualViewport.checkpoints.every((checkpoint) => checkpoint.visibleSegments > 0)
+            } : {}),
+            ...(sampledResources ? {
               processTreeAtMost2GiB: sampledResources.peakProcessTreeBytes <= 2 * 1024 ** 3,
               rendererAtMost1GiB: sampledResources.peakWebView2Bytes <= 1024 ** 3
             } : {})
@@ -2792,7 +2760,7 @@ async function main() {
     if (!options.liveSplitCase) {
       let scrollRun;
       try {
-        scrollRun = await launch(options.executable, resolve(corpusDirectory, 'scroll-markers-1000.md'), 9337, runtimeDirectory);
+        scrollRun = await launch(options.executable, resolve(corpusDirectory, 'scroll-markers-1000.md'), runtimeDirectory);
         await selectLayout(scrollRun.client, 'split');
         result.scrollAlignment = await measureScrollAlignment(scrollRun.client);
       } catch (error) {
@@ -2810,7 +2778,7 @@ async function main() {
   }
   if (options.exportSemanticsOnly) {
     const fixture = await createExportSemanticsFixture();
-    const run = await launch(options.executable, fixture.markdownPath, 9324, runtimeDirectory);
+    const run = await launch(options.executable, fixture.markdownPath, runtimeDirectory);
     try {
       const baseRequest = {
         snapshot: {
@@ -2896,7 +2864,7 @@ async function main() {
     let run;
     try {
       const fixture = await createPdfResourceFixture(runtimeDirectory, capture.endpoint);
-      run = await launch(options.executable, fixture.markdownPath, 9323, runtimeDirectory);
+      run = await launch(options.executable, fixture.markdownPath, runtimeDirectory);
       const request = {
         snapshot: {
           jobId: 'pdf-resource-isolation',
@@ -2982,7 +2950,7 @@ async function main() {
   }
   if (options.previewResourcesOnly) {
     const fixture = await createPreviewResourceFixture(runtimeDirectory);
-    const settingsRun = await launch(options.executable, resolve(corpusDirectory, 'representative-10-kib.md'), 9321, runtimeDirectory);
+    const settingsRun = await launch(options.executable, resolve(corpusDirectory, 'representative-10-kib.md'), runtimeDirectory);
     try {
       await settingsRun.client.evaluate(`(async () => {
         const invoke = window.__TAURI_INTERNALS__.invoke;
@@ -2992,7 +2960,7 @@ async function main() {
     } finally {
       await stop(settingsRun);
     }
-    const run = await launch(options.executable, fixture.markdownPath, 9322, runtimeDirectory);
+    const run = await launch(options.executable, fixture.markdownPath, runtimeDirectory);
     try {
       const measured = await measurePreviewResources(run, 100, options.expectLegacy);
       const result = {
@@ -3043,7 +3011,7 @@ async function main() {
   if (options.interactionOnly) {
     const smallCorpus = resolve(corpusDirectory, 'representative-10-kib.md');
     const largeCorpus = resolve(corpusDirectory, 'representative-5-mib.md');
-    const settingsRun = await launch(options.executable, smallCorpus, 9318, runtimeDirectory);
+    const settingsRun = await launch(options.executable, smallCorpus, runtimeDirectory);
     try {
       await settingsRun.client.evaluate(`(async () => {
         const invoke = window.__TAURI_INTERNALS__.invoke;
@@ -3054,7 +3022,7 @@ async function main() {
       await stop(settingsRun);
     }
 
-    const largeRun = await launch(options.executable, largeCorpus, 9319, runtimeDirectory);
+    const largeRun = await launch(options.executable, largeCorpus, runtimeDirectory);
     let large;
     try {
       const divider = await measureDividerGhost(largeRun.client, options.operationSamples, options.expectLegacy);
@@ -3072,7 +3040,7 @@ async function main() {
       await stop(largeRun);
     }
 
-    const smallRun = await launch(options.executable, smallCorpus, 9320, runtimeDirectory);
+    const smallRun = await launch(options.executable, smallCorpus, runtimeDirectory);
     let small;
     try {
       await selectLayout(smallRun.client, 'edit');
@@ -3110,37 +3078,87 @@ async function main() {
     process.stdout.write(`${JSON.stringify({ output: options.output, budgets: result.budgets, large: result.large.edit, small: result.small.edit }, null, 2)}\n`);
     return;
   }
-  if (options.searchOnly) {
-    const corpus = manifest.files.find((file) => file.kind === 'denseSearch');
-    if (!corpus) throw new Error('The fixed corpus manifest has no denseSearch case');
-    const run = await launch(options.executable, resolve(corpusDirectory, corpus.name), 9320, runtimeDirectory);
+  if (process.argv.includes('--scroll-feedback-only')) {
+    const cases = {};
+    for (const name of ['representative-500-kib.md', 'representative-10-mib.md']) {
+      const run = await launch(options.executable, resolve(corpusDirectory, name), runtimeDirectory,
+        resolve(runtimeDirectory, name + '-webview'));
+      try {
+        await selectLayout(run.client, 'split');
+        const split = await verifyScrollFeedback(run.client, true);
+        await selectLayout(run.client, 'preview');
+        await run.client.evaluate(`document.querySelector('.preview-content').scrollTop = 0`);
+        const preview = await verifyScrollFeedback(run.client, false);
+        cases[name] = { split, preview };
+      } finally { await stop(run); }
+      await mkdir(dirname(options.output), { recursive: true });
+      await writeFile(options.output, `${JSON.stringify({ artifact: { sha256: createHash('sha256').update(executable).digest('hex') }, cases }, null, 2)}\n`);
+      process.stdout.write(`Scroll feedback passed: ${name}\n`);
+    }
+    return;
+  }
+  if (process.argv.includes('--residency-only')) {
+    const fixtureDirectory = resolve(runtimeDirectory, 'documents');
+    await mkdir(fixtureDirectory, { recursive: true });
+    const paths = ['a', 'b', 'c', 'd', 'e'].map(name => resolve(fixtureDirectory, `residency-${name}.md`));
+    const large = await readFile(resolve(corpusDirectory, 'representative-10-mib.md'));
+    const small = await readFile(resolve(corpusDirectory, 'representative-10-kib.md'));
+    await Promise.all(paths.map((path, index) => writeFile(path, index === 0 ? large : small)));
+    const run = await launch(options.executable, paths[0], runtimeDirectory);
     try {
-      const beforeResources = await processResources(run.child.pid);
-      const measurement = await measureDenseSearch(run.client);
-      const afterResources = await processResources(run.child.pid);
+      await selectLayout(run.client, 'split');
+      const before = await processTreeResources(run.child.pid);
+      const result = await verifyDocumentResidency(run.client, async path => {
+        const child = spawn(options.executable, [path], { cwd: repositoryRoot, windowsHide: true, stdio: 'ignore' });
+        if (!(await waitForChildExit(child, 10000))) { await terminateChild(child); throw new Error('Single-instance open did not exit'); }
+      }, paths);
+      const after = await processTreeResources(run.child.pid);
+      await mkdir(dirname(options.output), { recursive: true });
+      await writeFile(options.output, `${JSON.stringify({ artifact: { sha256: createHash('sha256').update(executable).digest('hex') }, before, after, ...result }, null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify({ output: options.output, checks: result.checks, tabs: result.tabs }, null, 2)}\n`);
+    } finally { await stop(run); }
+    return;
+  }
+  if (options.searchOnly) {
+    const corpus = manifest.files.find((file) => options.searchCorpus ? file.name === options.searchCorpus : file.kind === 'denseSearch');
+    if (!corpus) throw new Error(`Unknown search corpus: ${options.searchCorpus ?? 'denseSearch'}`);
+    const run = await launch(options.executable, resolve(corpusDirectory, corpus.name), runtimeDirectory);
+    const sampler = startProcessTreeSampler(run.child.pid);
+    try {
+      const beforeResources = await processTreeResources(run.child.pid);
+      const measurement = await measureDenseSearch(run.client, options.searchQuery, process.argv.includes('--search-profile'));
+      const semantics = process.argv.includes('--search-semantics') ? await verifyEditorSearch(run.client) : undefined;
+      const afterResources = await processTreeResources(run.child.pid);
+      const memory = await sampler.stop();
       const result = {
         schemaVersion: 1,
         capturedAt: new Date().toISOString(),
         methodology: {
-          build: 'npm run tauri -- build --no-bundle (release, default locked Cargo profile)',
+          build: options.executable === executablePath ? 'release (default locked Cargo profile)' : 'explicit --executable override; see artifact',
           surface: 'real Windows WebView2 driven through the existing isolated CDP benchmark mode',
-          search: 'Ctrl+F plus trusted CDP text input on the fixed 5 MiB dense-search corpus',
+          search: 'Ctrl+F plus trusted CDP text input on the selected fixed corpus',
+          query: options.searchQuery,
+          memory: 'process-tree working set sampled with 250 ms sleep plus OS enumeration time; observed peak, not guaranteed instantaneous peak',
           edit: 'trusted CDP insertion while search remains open, measured to editor mutation plus two frames',
           scroll: 'real requestAnimationFrame intervals while changing the CodeMirror scroller',
           measurementPerturbation: 'CDP loopback, MutationObserver, PerformanceObserver and process sampling are benchmark-only'
         },
         corpus,
+        artifact: { name: basename(options.executable), sha256: createHash('sha256').update(executable).digest('hex'), bytes: executable.byteLength, path: options.executable },
         startupMs: run.startupMs,
         webViewUserAgent: run.ready.userAgent,
         toolchain,
         beforeResources,
         ...measurement,
-        afterResources
+        semantics,
+        afterResources,
+        memory
       };
       await mkdir(dirname(options.output), { recursive: true });
       await writeFile(options.output, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
       process.stdout.write(`${JSON.stringify({ output: options.output, search: result.search, edit: result.edit, runtime: result.runtime }, null, 2)}\n`);
     } finally {
+      await sampler.stop();
       await stop(run);
     }
     return;
@@ -3148,7 +3166,7 @@ async function main() {
   if (options.mindMapOnly) {
     const corpus = manifest.files.find((file) => file.kind === 'manyHeadings');
     if (!corpus) throw new Error('The fixed corpus manifest has no manyHeadings case');
-    const run = await launch(options.executable, resolve(corpusDirectory, corpus.name), 9320, runtimeDirectory);
+    const run = await launch(options.executable, resolve(corpusDirectory, corpus.name), runtimeDirectory);
     try {
       const beforeResources = await processResources(run.child.pid);
       const measurement = await measureMindMapWebView(run.client);
@@ -3187,7 +3205,7 @@ async function main() {
 
   for (let index = 0; index < startupSamples; index += 1) {
     process.stdout.write(`startup ${index + 1}/${startupSamples}\n`);
-    const run = await launch(options.executable, resolve(corpusDirectory, 'representative-10-kib.md'), 9320 + index, runtimeDirectory);
+    const run = await launch(options.executable, resolve(corpusDirectory, 'representative-10-kib.md'), runtimeDirectory);
     startup.push(run.startupMs);
     startupResources.push(await processResources(run.child.pid));
     userAgent ??= run.ready.userAgent;
@@ -3201,7 +3219,7 @@ async function main() {
     const file = corpusCases[index];
     process.stdout.write(`corpus ${index + 1}/${corpusCases.length}: ${file.name}\n`);
     try {
-      const run = await launch(options.executable, resolve(corpusDirectory, file.name), 9420 + index, runtimeDirectory);
+      const run = await launch(options.executable, resolve(corpusDirectory, file.name), runtimeDirectory);
       corpusLoads.push({ name: file.name, interactiveMs: run.startupMs, resources: await processResources(run.child.pid) });
       await stop(run);
     } catch (error) {
@@ -3213,7 +3231,7 @@ async function main() {
   process.stdout.write('operations: representative-500-kib.md\n');
   let operations;
   try {
-    const run = await launch(options.executable, resolve(corpusDirectory, 'representative-500-kib.md'), 9520, runtimeDirectory);
+    const run = await launch(options.executable, resolve(corpusDirectory, 'representative-500-kib.md'), runtimeDirectory);
     try {
       const input = await measureInputToPaint(run.client);
       const scroll = await measureFrames(run.client, '.cm-scroller', 'scroll');
@@ -3249,7 +3267,7 @@ async function main() {
 
   process.stdout.write('boundary input: representative-5-mib.md\n');
   try {
-    const boundaryRun = await launch(options.executable, resolve(corpusDirectory, 'representative-5-mib.md'), 9521, runtimeDirectory);
+    const boundaryRun = await launch(options.executable, resolve(corpusDirectory, 'representative-5-mib.md'), runtimeDirectory);
     try {
       const boundaryInput = await measureInputToPaint(boundaryRun.client, 1);
       operations.input5MiBBoundary = {

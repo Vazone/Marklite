@@ -327,7 +327,7 @@
 }
 
 .markdown-preview math[display='block'] {
-  display: block;
+  /* Preserve the browser's block math layout; plain block stacks formula tokens. */
   width: fit-content;
   max-width: 100%;
   margin: 1em auto;
@@ -364,6 +364,7 @@
 
 .markdown-preview img {
   max-width: 100%;
+  height: auto;
   border-radius: var(--radius-md);
 }
 

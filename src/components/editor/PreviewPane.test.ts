@@ -134,6 +134,23 @@ function renderedDiagram(source: DiagramSource, label: string): RenderedDiagram 
 }
 
 describe('PreviewPane mind map mode', () => {
+  test('Ctrl+wheel zooms the article pane while normal wheel remains scroll input', async () => {
+    await render('<p>Article body</p>');
+    const host = target.querySelector<HTMLElement>('.preview-content')!;
+    const viewport = host.parentElement!;
+    const normal = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 100 });
+    host.dispatchEvent(normal);
+    expect(normal.defaultPrevented).toBe(false);
+    expect(host.style.transform).toBe('');
+
+    const zoom = new WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -100 });
+    host.dispatchEvent(zoom);
+    expect(zoom.defaultPrevented).toBe(true);
+    expect(host.style.transform).toContain('scale(');
+    expect(viewport.style.transform).toBe('');
+    expect(host.style.fontSize).toBe(`${defaultSettings.previewFontSize}px`);
+  });
+
   test.each([false, true])('syncs user preview scrolling after paint without echoing editor scrolling (chunked=%s)', async (chunked) => {
     const syncEditorLine = vi.fn();
     target = document.createElement('div');
@@ -536,7 +553,7 @@ describe('PreviewPane Markdown navigation', () => {
 
     await click('a');
     await vi.waitFor(() =>
-      expect(onOpenDocument).toHaveBeenCalledWith('C:\\docs\\other.md', 'part')
+      expect(onOpenDocument).toHaveBeenCalledWith({ kind: 'desktopFile', path: 'C:\\docs\\other.md' }, 'part')
     );
 
     expect(mocks.resolveMarkdownTarget).toHaveBeenCalledWith(
@@ -699,6 +716,37 @@ describe('PreviewPane local images', () => {
     expect(target.querySelector<HTMLImageElement>('img')?.title).toBe(
       'C:\\docs\\images\\pixel.png'
     );
+  });
+
+  test('keeps explicit image widths proportional instead of adding the source pixel height', async () => {
+    const source = 'marklite:assets%2Flogo%2Epng';
+    mocks.loadLocalImages.mockResolvedValueOnce({
+      entries: [{
+        target: source,
+        resource: {
+          objectUrl: 'blob:logo', path: 'C:\\docs\\assets\\logo.png',
+          width: 1024, height: 1024, encodedBytes: 4, decodedBytes: 4
+        },
+        error: null
+      }],
+      objectUrls: ['blob:logo']
+    });
+    await render(
+      `<img src="${source}" width="112" alt="Fixed">` +
+      `<img src="${source}" width="100%" alt="Fluid">` +
+      `<img src="${source}" alt="Natural">`,
+      { allowLocalImages: true }
+    );
+
+    await vi.waitFor(() => expect(target.querySelectorAll('img[src="blob:logo"]')).toHaveLength(3));
+    const [fixed, fluid, natural] = [...target.querySelectorAll<HTMLImageElement>('img')];
+    expect(fixed.getAttribute('width')).toBe('112');
+    expect(fixed.hasAttribute('height')).toBe(false);
+    expect(fluid.getAttribute('width')).toBe('100%');
+    expect(fluid.hasAttribute('height')).toBe(false);
+    expect(getComputedStyle(fluid).height).toBe('auto');
+    expect(natural.width).toBe(1024);
+    expect(natural.height).toBe(1024);
   });
 
   test('replaces a failed image with the structured backend message', async () => {

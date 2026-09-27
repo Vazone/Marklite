@@ -35,9 +35,9 @@ export function wrapPreviewChunks(fragment: DocumentFragment): PreviewChunks {
   return { leaves, groups, baseHeights: [], measuredWidth: 0, seenGroups: new Set() };
 }
 
-export function measurePreviewChunks(host: HTMLElement, chunks: PreviewChunks) {
-  const leafHeights = chunks.leaves.map((leaf) => leaf.getBoundingClientRect().height);
-  const groupHeights = chunks.groups.map((group) => group.getBoundingClientRect().height);
+export function measurePreviewChunks(host: HTMLElement, chunks: PreviewChunks, visualScale = 1) {
+  const leafHeights = chunks.leaves.map((leaf) => leaf.getBoundingClientRect().height / visualScale);
+  const groupHeights = chunks.groups.map((group) => group.getBoundingClientRect().height / visualScale);
   chunks.baseHeights = leafHeights;
   chunks.measuredWidth = host.clientWidth;
 
@@ -53,11 +53,11 @@ export function measurePreviewChunks(host: HTMLElement, chunks: PreviewChunks) {
   }
 }
 
-export function rescalePreviewChunks(host: HTMLElement, chunks: PreviewChunks, force = false) {
+export function rescalePreviewChunks(host: HTMLElement, chunks: PreviewChunks, force = false, visualScale = 1) {
   const width = host.clientWidth;
   if (!force && Math.abs(width - chunks.measuredWidth) < 0.5) return false;
 
-  const rect = host.getBoundingClientRect();
+  const rect = (visualScale > 1 ? host.parentElement ?? host : host).getBoundingClientRect();
   const element = document.elementFromPoint?.(rect.left + rect.width / 2, rect.top + rect.height / 2);
   const visibleLeaf = element instanceof Element ? element.closest<HTMLElement>('.preview-chunk') : null;
   const visibleGroup = visibleLeaf?.parentElement;
@@ -65,7 +65,7 @@ export function rescalePreviewChunks(host: HTMLElement, chunks: PreviewChunks, f
   const index = visibleLeaf && host.contains(visibleLeaf) ? chunks.leaves.indexOf(visibleLeaf) : 0;
   const leaf = chunks.leaves[Math.max(0, index)];
   const baseHeight = chunks.baseHeights[Math.max(0, index)];
-  const actualHeight = leaf?.getBoundingClientRect().height ?? 0;
+  const actualHeight = (leaf?.getBoundingClientRect().height ?? 0) / visualScale;
   const scale = baseHeight > 0 && actualHeight > 0 ? actualHeight / baseHeight : 1;
 
   host.style.setProperty('--preview-group-scale', String(scale));

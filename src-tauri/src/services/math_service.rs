@@ -1,9 +1,14 @@
+use crate::models::markdown_event::Event;
+#[path = "math_service/mathml_input.rs"]
+mod mathml_input;
+#[path = "math_service/mathml_output.rs"]
+mod mathml_output;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{iter::Peekable, str::CharIndices};
 
 use html_escape::{encode_double_quoted_attribute, encode_text};
 use latex2mathml::{latex_to_mathml, DisplayStyle};
-use pulldown_cmark::{CowStr, Event};
+use pulldown_cmark::CowStr;
 
 use crate::models::export::ExportWarning;
 
@@ -11,7 +16,8 @@ pub(crate) const MAX_FORMULAS: usize = 256;
 const MAX_FORMULA_BYTES: usize = 4_096;
 const MAX_NESTING: usize = 64;
 const MAX_COMMANDS: usize = 256;
-const SUPPORTED_ENVIRONMENTS: &[&str] = &["matrix", "pmatrix", "bmatrix", "vmatrix", "align"];
+const SUPPORTED_ENVIRONMENTS: &[&str] =
+    &["matrix", "pmatrix", "bmatrix", "vmatrix", "align", "cases"];
 static RENDER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 const ALLOWED_COMMANDS: &[&str] = &[
@@ -254,13 +260,14 @@ impl MathHtml {
 pub(crate) fn render_mathml(source: &str, display: bool) -> Result<String, MathRenderError> {
     validate_formula(source)?;
     latex_to_mathml(
-        source,
+        &mathml_input::mathml_source(source),
         if display {
             DisplayStyle::Block
         } else {
             DisplayStyle::Inline
         },
     )
+    .map(mathml_output::normalize)
     .map_err(|error| MathRenderError {
         code: "MATH_RENDER_FAILED",
         message: format!("unsupported or invalid math expression: {error}"),
@@ -461,10 +468,82 @@ fn syntax_error_at(message: &str, byte_index: usize) -> MathRenderError {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::markdown_event::{self as html, Event};
     use std::time::Instant;
 
     use super::{render_math_events, render_mathml, render_omml};
-    use pulldown_cmark::{html, CowStr, Event};
+    use pulldown_cmark::CowStr;
+
+    #[test]
+    fn mathml_preserves_alphabet_styles_and_explicit_delimiter_sizing() {
+        for (source, symbol) in [
+            (r"\mathcal{A}", "𝒜"),
+            (r"\mathbb{R}", "ℝ"),
+            (r"\mathfrak{g}", "𝔤"),
+            (r"\mathbf{x}", "𝐱"),
+        ] {
+            let output = render_mathml(source, false).unwrap();
+            assert!(output.contains(symbol), "{source}: {output}");
+        }
+        let output = render_mathml(r"f(x)=\left(\frac{a}{b}\right)", true).unwrap();
+        assert!(
+            output.contains(r#"<mo stretchy="false">(</mo>"#),
+            "{output}"
+        );
+        assert!(output.contains(r#"stretchy="true""#), "{output}");
+    }
+
+    #[test]
+    fn named_math_fixtures_preserve_semantics_in_both_engines() {
+        let fixtures: serde_json::Value =
+            serde_json::from_str(include_str!("../../../src/shared/math-fixtures.json")).unwrap();
+        let entries = fixtures.as_array().unwrap();
+        let mut ids = std::collections::HashSet::new();
+        for command in super::ALLOWED_COMMANDS {
+            let token = format!("\\{command}");
+            assert!(
+                entries.iter().any(|f| {
+                    let source = f["source"].as_str().unwrap();
+                    source.match_indices(&token).any(|(at, _)| {
+                        !command.chars().all(|c| c.is_ascii_alphabetic())
+                            || !source[at + token.len()..]
+                                .chars()
+                                .next()
+                                .is_some_and(|c| c.is_ascii_alphabetic())
+                    })
+                }),
+                "missing command fixture: {command}"
+            );
+        }
+        for fixture in entries {
+            let id = fixture["id"].as_str().unwrap();
+            assert!(ids.insert(id), "duplicate fixture id: {id}");
+            let source = fixture["source"].as_str().unwrap();
+            let mathml =
+                render_mathml(source, true).unwrap_or_else(|e| panic!("{id} MathML: {e:?}"));
+            let omml = render_omml(source).unwrap_or_else(|e| panic!("{id} OMML: {e:?}"));
+            assert!(!mathml.contains("[PARSE ERROR:"), "{id}: {mathml}");
+            for (field, output) in [("mathml", mathml), ("omml", omml)] {
+                for marker in fixture[field].as_array().unwrap() {
+                    assert!(
+                        output.contains(marker.as_str().unwrap()),
+                        "{id} {field}: {output}"
+                    );
+                }
+            }
+            let invalid = format!("{source} \\unknowncommand");
+            assert_eq!(
+                render_mathml(&invalid, true).unwrap_err().code,
+                "MATH_COMMAND_UNSUPPORTED",
+                "{id}"
+            );
+            assert_eq!(
+                render_omml(&invalid).unwrap_err().code,
+                "MATH_COMMAND_UNSUPPORTED",
+                "{id}"
+            );
+        }
+    }
 
     #[test]
     fn renders_the_shared_basic_subset_to_mathml_and_editable_omml() {
@@ -509,10 +588,40 @@ mod tests {
     }
 
     #[test]
+    fn renders_cases_without_losing_rows_or_the_left_brace() {
+        let source = r"f(x)=\begin{cases}x^2 & x>0 \\ 0 & x\leq0\end{cases}";
+        let mathml = render_mathml(source, true).unwrap();
+        let omml = render_omml(source).unwrap();
+        assert!(mathml.contains("<mtable"), "{mathml}");
+        assert_eq!(mathml.matches("<mtr>").count(), 2, "{mathml}");
+        assert!(mathml.contains('{'), "{mathml}");
+        assert!(omml.contains("<m:m>"), "{omml}");
+        assert_eq!(omml.matches("<m:mr>").count(), 2, "{omml}");
+        assert!(omml.contains("<m:begChr m:val=\"{\""), "{omml}");
+        assert!(omml.contains("<m:endChr m:val=\"\""), "{omml}");
+    }
+
+    #[test]
+    fn renders_nested_cases_and_validates_the_original_environment_positions() {
+        let source = r"\begin {cases}\frac{1}{2} & x>0 \\ \begin{cases}a & y>0 \\ b & y\leq0\end{cases} & x\leq0\end {cases}";
+        let mathml = render_mathml(source, true).unwrap();
+        let omml = render_omml(source).unwrap();
+        assert_eq!(mathml.matches("<mtable").count(), 2, "{mathml}");
+        assert_eq!(omml.matches("<m:m>").count(), 2, "{omml}");
+        assert!(mathml.contains("<mfrac>"));
+        assert!(omml.contains("<m:f>"));
+        let source = r"x+\begin{cases}a\end{matrix}";
+        let error = render_mathml(source, true).unwrap_err();
+        assert_eq!(error.code, "MATH_SYNTAX_INVALID");
+        assert!(error.message.contains("byte 16"), "{}", error.message);
+        assert!(render_omml(source).is_err());
+    }
+
+    #[test]
     fn rejects_unknown_or_mismatched_environments_before_either_renderer() {
         for (source, expected) in [
             (
-                r"\begin{cases}x & x>0\end{cases}",
+                r"\begin{unknown}x & x>0\end{unknown}",
                 "MATH_ENVIRONMENT_UNSUPPORTED",
             ),
             (r"\begin{matrix}x\end{pmatrix}", "MATH_SYNTAX_INVALID"),

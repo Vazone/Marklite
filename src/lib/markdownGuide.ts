@@ -169,7 +169,7 @@ const zhCnMarkdownGuideTopics = [
     id: 'math', group: 'extended', title: '数学公式', support: 'limited',
     summary: '使用 $…$ 写行内公式、$$…$$ 或 math 围栏写块公式；预览、HTML/PDF 和 DOCX 共用受限子集。',
     example: '勾股定理：$a^2+b^2=c^2$\n\n$$\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$',
-    note: '稳定子集包含字母与数字、上下标、基本运算、\\frac、\\sqrt 和希腊字母。不支持自定义宏、URL/文件命令或完整 TeX；失败时保留可见源码并返回导出警告。价格中的美元符号可写成 \\$。'
+    note: '稳定子集包含字母与数字、上下标、基本运算、\\frac、\\sqrt 、希腊字母、求和积分、矩阵、align 多行对齐及 cases 分段函数。DOCX 公式可编辑。不支持自定义宏、URL/文件命令或完整 TeX；失败时保留可见源码并返回导出警告。价格中的美元符号可写成 \\$。'
   },
   {
     id: 'mermaid', group: 'extended', title: 'Mermaid 图表', support: 'limited',
@@ -199,9 +199,9 @@ const zhCnMarkdownGuideTopics = [
   },
   {
     id: 'code-info-string', group: 'extended', title: '代码语言标记', support: 'limited',
-    summary: '围栏开始处可写语言名，MarkLite 会保留语言 class。',
+    summary: '围栏语言名可启用编辑器、预览和导出的代码着色。',
     example: '```typescript\nconst ready: boolean = true;\n```',
-    note: '当前预览没有内置按语言着色的高亮引擎。'
+    note: '支持 JS/TS、JSON、HTML/CSS、Rust、Python、Shell、SQL、YAML。按可见区域加载；未知语言或超限代码完整显示原文。单块最多 65536 个 UTF-16 单元、单行 16384、8192 个颜色区间，导出降级会提示。着色不执行代码，不改变复制内容。'
   },
   {
     id: 'footnotes', group: 'extended', title: '脚注', support: 'supported',
@@ -245,9 +245,10 @@ const zhCnMarkdownGuideTopics = [
     example: '完成 ✅  注意 ⚠️  灵感 💡'
   },
   {
-    id: 'emoji-shortcodes', group: 'extended', title: 'Emoji 短码', support: 'unsupported',
-    summary: ':smile:、:warning: 一类短码不会被 MarkLite 自动替换。',
-    example: ':smile: 仍按普通文字显示。'
+    id: 'emoji-shortcodes', group: 'extended', title: 'Emoji 短码', support: 'supported',
+    summary: '正文中的 :smile:、:+1: 等短码通过本地映射显示为 Emoji，原始 Markdown 保持不变。',
+    example: ':smile: :+1: :unknown_alias:',
+    note: '短码区分大小写，未知短码保持原样；代码、公式、HTML、URL 和转义内容不替换。编辑器保留短码并标识语法，图形显示由系统字体决定。'
   },
   {
     id: 'bare-url-autolinks', group: 'extended', title: '裸网址自动链接', support: 'supported',
@@ -261,20 +262,24 @@ const zhCnMarkdownGuideTopics = [
     example: '等待...  范围 1--5  "引用文字"'
   },
   {
-    id: 'highlight-syntax', group: 'extended', title: '双等号高亮标记', support: 'unsupported',
-    summary: '==文字== 会按原文显示，不会生成高亮。', example: '==标记=='
+    id: 'highlight-syntax', group: 'extended', title: '双等号高亮标记', support: 'supported',
+    summary: '==文字== 在预览和导出中显示高亮，可包含粗体、链接等行内内容。', example: '==**标记**==',
+    note: '使用恰好两个等号，内容两端不留空白，不跨段落、表格单元格或已有格式边界；代码、公式、HTML、URL 和转义内容保持原样。编辑器保留原始标记并显示高亮。'
   },
   {
-    id: 'subscript-superscript', group: 'extended', title: '上下标简写', support: 'unsupported',
-    summary: 'H~2~O 与 x^2^ 不会作为上下标解析；公式请使用受限数学语法。', example: 'H~2~O 与 x^2^'
+    id: 'subscript-superscript', group: 'extended', title: '上下标简写', support: 'supported',
+    summary: 'H~2~O 与 x^2^ 分别显示下标和上标。', example: 'H~2~O 与 x^2^',
+    note: '单 ~ 和 ^ 在同一行内格式范围配对；内容不含未转义空白，空格可用反斜杠转义。~~ 保持删除线，代码、公式、HTML、URL 和转义标记保持原样。'
   },
   {
-    id: 'front-matter', group: 'extended', title: 'YAML 头部', support: 'unsupported',
-    summary: '文件开头的 --- 不会成为元数据，仍按普通 Markdown 解析。', example: '---\ntitle: 示例\n---\n正文'
+    id: 'front-matter', group: 'extended', title: 'YAML 头部', support: 'limited',
+    summary: '合法文首 YAML 映射不进入渲染正文；原文和应用设置保持不变。', example: '---\ntitle: 示例\n---\n正文',
+    note: '限制为 64 KiB、32 层和 4096 个解析事件，不接受锚点、别名及显式标签。无效头部保持可见；预览显示行列提示，点击可跳到源码。编辑器保留元数据源码，导出告警包含源码位置。'
   },
   {
-    id: 'document-toc', group: 'extended', title: '文内目录标记', support: 'unsupported',
-    summary: '[TOC] 不会插入文内目录；侧栏可查看标题大纲。', example: '[TOC]\n\n# 标题'
+    id: 'document-toc', group: 'extended', title: '文内目录标记', support: 'supported',
+    summary: '独立根段落 [TOC] 插入全文标题目录，可放在文首、文中或文末。', example: '[TOC]\n\n# 标题',
+    note: '目录保留标题层级和重复标题的独立链接；长目录按视口加载，PDF 和 DOCX 保留跳转。代码、转义、列表和引用中的标记不展开。没有标题时显示空目录；源文件中的标记不被改写。'
   },
   {
     id: 'mind-map-headings', group: 'mindMap', title: '用标题生成脑图', support: 'supported',
@@ -324,13 +329,13 @@ const enTopicText: Record<MarkdownGuideTopicId, LocalizedTopicText> = {
   'inline-html': { title: 'Inline HTML', summary: 'Markdown may contain inline HTML, but MarkLite sanitizes it before display.', example: 'This is <mark>highlighted</mark> and this is <kbd>Ctrl</kbd>.', note: 'Only allowed tags and attributes remain. Scripts and event attributes never execute.' },
   'block-html': { title: 'Block HTML', summary: 'The parser accepts block HTML, but sanitization and nested Markdown behavior follow the security boundary.', example: '<div class="notice">\n  Raw HTML content\n</div>', note: 'Do not depend on arbitrary HTML, styles, iframes, or scripts for document behavior.' },
   'extension-profile': { title: 'MarkLite extension profile', summary: 'MarkLite uses GFM as its base and explicitly adds footnotes, heading attributes, GitHub alerts, definition lists, and bounded math. Ordinary punctuation remains unchanged.', example: '| Feature | Status |\n| --- | --- |\n| Tables | Enabled |\n| Footnotes | Enabled |' },
-  math: { title: 'Mathematical expressions', summary: 'Use $…$ for inline math and $$…$$ or a math fence for display math. Preview, HTML/PDF, and DOCX share a bounded subset.', example: 'Pythagoras: $a^2+b^2=c^2$\n\n$$\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$', note: 'The stable subset covers letters and numbers, scripts, basic operators, \\frac, \\sqrt, and Greek letters. User macros, URL/file commands, and complete TeX are unsupported. Failures preserve visible source and return export warnings. Escape currency dollars as \\$.' },
+  math: { title: 'Mathematical expressions', summary: 'Use $…$ for inline math and $$…$$ or a math fence for display math. Preview, HTML/PDF, and DOCX share a bounded subset.', example: 'Pythagoras: $a^2+b^2=c^2$\n\n$$\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$', note: 'The stable subset covers letters and numbers, scripts, basic operators, \\frac, \\sqrt, Greek letters, sums and integrals, matrices, align, and cases. DOCX equations remain editable. User macros, URL/file commands, and complete TeX are unsupported. Failures preserve visible source and return export warnings. Escape currency dollars as \\$.' },
   mermaid: { title: 'Mermaid diagrams', summary: 'Write an offline diagram in a mermaid fence. Preview and HTML, PDF, DOCX export render it after a compatible offline pack is installed.', example: '```mermaid\nflowchart TD\nA[Start]-->B[Done]\n```', note: 'Missing pack or invalid syntax preserves visible source. DOCX embeds an image, not editable diagram source.' },
   tables: { title: 'Tables', summary: 'Use a hyphen separator below the header row and vertical bars between cells.', example: '| Feature | Status |\n| --- | --- |\n| Preview | Complete |\n| Mind map | Complete |' },
   'table-alignment': { title: 'Table alignment', summary: 'Colons on the left, right, or both sides of the separator select left, right, or centered alignment.', example: '| Left | Center | Right |\n| :--- | :---: | ---: |\n| A | B | 100 |' },
   'table-formatting-pipes': { title: 'Table formatting and escaped pipes', summary: 'Cells support inline emphasis, code, and links. Escape a literal vertical bar with a backslash.', example: '| Name | Example |\n| --- | --- |\n| **Emphasis** | `A \\| B` |' },
   'fenced-code': { title: 'Fenced code blocks', summary: 'Surround multiple lines with three or more backticks or tildes without indenting every line.', example: '~~~rust\nfn main() {\n    println!("MarkLite");\n}\n~~~' },
-  'code-info-string': { title: 'Code language labels', summary: 'Add a language after the opening fence. MarkLite preserves it as a language class.', example: '```typescript\nconst ready: boolean = true;\n```', note: 'The preview currently has no built-in language-aware syntax highlighter.' },
+  'code-info-string': { title: 'Code language labels', summary: 'Fence language labels enable code coloring in the editor, preview and exports.', example: '```typescript\nconst ready: boolean = true;\n```', note: 'Supports JS/TS, JSON, HTML/CSS, Rust, Python, Shell, SQL and YAML. Visible blocks load on demand. Unknown or over-budget code stays complete plain text: 65536 UTF-16 units per block, 16384 per line and 8192 color ranges. Export fallback reports a warning. Coloring never executes code or changes copied text.' },
   footnotes: { title: 'Footnotes', summary: 'Reference a footnote with [^id] and define it elsewhere with [^id]:.', example: 'MarkLite is a lightweight editor.[^about]\n\n[^about]: It supports live preview and multi-format export.' },
   'heading-ids': { title: 'Heading IDs', summary: 'Add {#id} at the end of a heading. MarkLite generates stable unique anchors when no ID is supplied.', example: '## Installation {#install}' },
   'heading-id-links': { title: 'Links to headings', summary: 'Use # plus a heading ID to jump within the current preview.', example: '[Jump to installation](#install)\n\n## Installation {#install}' },
@@ -339,13 +344,13 @@ const enTopicText: Record<MarkdownGuideTopicId, LocalizedTopicText> = {
   strikethrough: { title: 'Strikethrough', summary: 'Wrap obsolete content with two tildes.', example: '~~Old plan~~ New plan' },
   'task-lists': { title: 'Task lists', summary: 'Use [ ] or [x] after a list marker for incomplete and complete tasks.', example: '- [x] Confirm requirements\n- [ ] Complete validation' },
   'unicode-emoji': { title: 'Unicode Emoji', summary: 'Enter and save Unicode Emoji directly. Appearance depends on the system font.', example: 'Complete ✅  Caution ⚠️  Idea 💡' },
-  'emoji-shortcodes': { title: 'Emoji shortcodes', summary: 'MarkLite does not automatically replace shortcodes such as :smile: or :warning:.', example: ':smile: remains plain text.' },
+  'emoji-shortcodes': { title: 'Emoji shortcodes', summary: 'Shortcodes such as :smile: and :+1: render as Emoji using a local registry. Original Markdown stays unchanged.', example: ':smile: :+1: :unknown_alias:', note: 'Aliases are case-sensitive. Unknown codes, code, math, HTML, URLs and escaped text stay literal. The editor retains and highlights shortcodes; appearance depends on system fonts.' },
   'bare-url-autolinks': { title: 'Bare URL autolinks', summary: 'GFM bare URLs, www addresses, and email addresses are converted to controlled links.', example: 'https://docs.example.invalid/guide', note: 'Code spans and existing links are not linked again. Email uses the controlled mailto opener.' },
   'smart-punctuation': { title: 'Smart punctuation', summary: 'MarkLite does not rewrite ellipses, repeated hyphens, or straight quotes, preserving CommonMark/GFM text semantics.', example: 'Wait...  Range 1--5  "Quoted text"' },
-  'highlight-syntax': { title: 'Double equals markers', summary: '==text== stays visible source rather than becoming highlighted text.', example: '==Marked==' },
-  'subscript-superscript': { title: 'Subscript and superscript shorthand', summary: 'H~2~O and x^2^ stay source text. Use the bounded math syntax for formulas.', example: 'H~2~O and x^2^' },
-  'front-matter': { title: 'YAML front matter', summary: 'Leading --- does not create metadata. It follows ordinary Markdown rules.', example: '---\ntitle: Example\n---\nBody' },
-  'document-toc': { title: 'In-document table of contents', summary: '[TOC] does not insert a document block. The sidebar shows the heading outline.', example: '[TOC]\n\n# Heading' },
+  'highlight-syntax': { title: 'Double equals markers', summary: '==text== renders with highlighting in preview and exports. Bold text and links can be nested inside.', example: '==**Marked**==', note: 'Use exactly two equals signs with no inner edge whitespace. Do not cross paragraphs, table cells or existing formatting boundaries. Code, math, HTML, URLs and escaped text remain literal. The editor retains the original markers and highlights the content.' },
+  'subscript-superscript': { title: 'Subscript and superscript shorthand', summary: 'H~2~O and x^2^ render as subscript and superscript.', example: 'H~2~O and x^2^', note: 'Single ~ and ^ pair within one inline formatting parent. Escape spaces with a backslash; other whitespace is not allowed. Double ~~ remains strikeout. Code, math, HTML, URLs and escaped markers stay literal.' },
+  'front-matter': { title: 'YAML front matter', summary: 'A valid initial YAML mapping is omitted from the rendered body. Original source and application settings stay unchanged.', example: '---\ntitle: Example\n---\nBody', note: 'Limits: 64 KiB, 32 nesting levels and 4096 parser events; anchors, aliases and explicit tags are rejected. Invalid headers stay visible. Preview diagnostics link to the source line; the editor preserves metadata source. Export warnings include source locations.' },
+  'document-toc': { title: 'In-document table of contents', summary: 'A standalone root paragraph [TOC] inserts the full heading outline at the start, middle or end.', example: '[TOC]\n\n# Heading', note: 'Heading levels and distinct targets for repeated titles are preserved. Long TOCs load by viewport; PDF and DOCX keep navigation. Code, escaped markers, lists and blockquotes stay literal. A document without headings has an empty TOC; source markers are never rewritten.' },
   'mind-map-headings': { title: 'Build a mind map from headings', summary: 'The document name becomes the root. Headings from # through ###### form branches under the nearest parent heading.', example: '# Product plan\n\n## User value\n\n### Fast opening\n\n## Release plan' },
   'mind-map-hierarchy': { title: 'Hierarchy and skipped levels', summary: 'A skipped heading level attaches to the nearest available parent. Siblings keep document order.', example: '# Root topic\n\n### Skipped-level node\n\n## New branch\n\n### Child node' },
   'mind-map-editing': { title: 'Editing and node interaction', summary: 'Nodes are for browsing, expanding, collapsing, and jumping. Add, remove, or edit headings only in the editor.', example: 'Change `## Release plan` to `## Version roadmap`; the mind map updates with the next preview.' }
@@ -365,6 +370,7 @@ const enMarkdownGuideTopics: readonly MarkdownGuideTopic[] = zhCnMarkdownGuideTo
 }));
 
 export const namedExtensionGuideTopics = {
+  'code-highlighting': 'code-info-string',
   footnotes: 'footnotes',
   'definition-lists': 'definition-lists',
   alerts: 'github-alerts',

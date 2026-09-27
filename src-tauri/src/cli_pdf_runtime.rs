@@ -47,7 +47,7 @@ pub fn export_document_with_diagrams(
             tauri::async_runtime::spawn(async move {
                 let result = match request.format {
                     ExportFormat::Html => {
-                        crate::services::export_service::export_html_with_runtime_document(
+                        crate::platform::desktop::export::export_html_with_runtime_document(
                             &handle,
                             &request,
                             policy,
@@ -59,7 +59,7 @@ pub fn export_document_with_diagrams(
                         .await
                     }
                     ExportFormat::Docx => {
-                        crate::services::export_service::export_docx_with_runtime_document(
+                        crate::platform::desktop::export::export_docx_with_runtime_document(
                             &handle,
                             &request,
                             policy,

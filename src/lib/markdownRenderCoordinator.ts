@@ -67,6 +67,13 @@ export function createMarkdownRenderCoordinator(operations: MarkdownRenderOperat
       }, Math.max(100, debounceMs));
     },
     async runNow(request: MarkdownRenderRequest): Promise<boolean> {
+      const intent = `${request.kind}:${request.tabId}:${request.contentRevision}`;
+      // Consume a matching scheduled render before it can replace the freshly
+      // installed preview session and reset navigation. Preserve newer edits.
+      if (timer === undefined || lastIntent === intent) {
+        cancelTimer();
+        lastIntent = intent;
+      }
       const result = await queue.submit(request);
       return result.status === 'completed' && result.value;
     },

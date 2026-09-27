@@ -23,5 +23,6 @@
   "recentFilesLimit": 12,
   "markdownToolbarEnabled": true,
   "allowLocalImages": false,
-  "confirmExternalLinks": true
+  "confirmExternalLinks": true,
+  "checkUpdatesAutomatically": true
 }

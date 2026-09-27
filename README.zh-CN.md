@@ -2,7 +2,7 @@
   <img src="assets/marklite-icon.png" alt="MarkLite Logo" width="112" />
   <h1>MarkLite</h1>
   <p><strong>轻快、专注的 Markdown 编辑体验，不加载沉重的工作区。</strong></p>
-  <p>面向 Windows、macOS 和 Linux 的本地优先桌面编辑器，用于写作、预览、整理与导出 Markdown。</p>
+  <p>面向 Windows、macOS、Linux 和 Android 的本地优先 Markdown 编辑器，用于写作、预览、整理与导出 Markdown。</p>
   <p>
     <a href="README.md">English</a> ·
     <a href="README.zh-CN.md">简体中文</a> ·
@@ -10,11 +10,11 @@
     <a href="https://github.com/Vazone/Marklite/issues">问题反馈</a>
   </p>
   <p>
-    <a href="https://github.com/Vazone/Marklite/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/Vazone/Marklite?include_prereleases&sort=semver&style=flat-square&color=20b2aa" /></a>
-    <a href="https://github.com/Vazone/Marklite/actions/workflows/ci.yml"><img alt="CI 状态" src="https://github.com/Vazone/Marklite/actions/workflows/ci.yml/badge.svg?branch=branch" /></a>
-    <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/Vazone/Marklite?style=flat-square" /></a>
-    <a href="https://github.com/Vazone/Marklite/stargazers"><img alt="GitHub Stars" src="https://img.shields.io/github/stars/Vazone/Marklite?style=flat-square&logo=github" /></a>
-    <img alt="支持平台" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-4c566a?style=flat-square" />
+    <a href="https://github.com/Vazone/Marklite/releases">发布版本</a> ·
+    <a href="https://github.com/Vazone/Marklite/actions/workflows/ci.yml">构建状态</a> ·
+    <a href="https://github.com/Vazone/Marklite/blob/branch/LICENSE">MIT 许可证</a> ·
+    <a href="https://github.com/Vazone/Marklite/stargazers">收藏</a> ·
+    Windows · macOS · Linux · Android
   </p>
 </div>
 
@@ -22,6 +22,36 @@
   <img src="assets/marklite-showcase.gif" alt="MarkLite 展示 mixed-500-kib.md 中的公式、分栏滚动与章节 PNG 导出" width="100%" />
 </p>
 <p align="center"><sub>mixed-500-kib.md（500 KiB）：公式预览、分栏滚动与章节 PNG 导出</sub></p>
+
+## 0.1.7 有哪些更新
+
+- **目录工作区：**恢复上次打开的目录，通过可折叠目录树浏览、筛选 Markdown 文件；桌面端可右键在文件管理器中定位。
+- **Android 加入项目：**通过系统文件选择器或文件管理器打开文档，授权访问目录，保存修改，并通过 Android 文档提供程序导出。
+- **更完整的 Markdown：**Front Matter、文档目录、脚注、行内扩展、代码高亮、公式和 Mermaid 渲染改进。
+- **写作保护：**恢复副本、覆盖前的外部变更检查，以及最近文件和恢复标签页的处理改进。
+- **可选桌面更新：**后台检查新版，由你确认后再安装。
+- **DOCX 导出改进：**修复重复图表、脚注图片、可编辑公式和链接等问题。
+
+## 从目录到成稿
+
+1. **选择目录**，在侧边栏浏览其中的 Markdown 文档；下次启动时恢复目录选择。
+2. **选择编辑、预览或分栏布局**，打开多个文档，通过大纲导航标题。
+3. **选择导出格式**：HTML 分享、PDF 阅读、DOCX 继续编辑、SVG 脑图，或按章节输出 PNG 图片。
+
+| 格式 | 导出内容 |
+| --- | --- |
+| HTML | 包含格式化内容的独立文档 |
+| PDF | 分批渲染并合并的分页文档 |
+| DOCX | 保留受支持公式和图表的可编辑文档 |
+| PNG | 按章节生成图片，归入与文档同名的文件夹 |
+| SVG | 根据文档标题生成的矢量脑图 |
+
+### Android
+
+ARM64 APK 面向 Android 7.0 及以上（API 24）。文件和目录通过系统选择器授权访问，可用位置由 Android 权限和存储提供程序决定。竖屏布局避让系统栏，横屏提供更大的写作空间。最近文件、目录恢复、触控交互和导出复用编辑器核心能力。
+
+桌面自动更新和 Android APK 安装是不同机制：Android 下载 APK 后由系统安装。旧 debug 签名测试版可能需要先卸载，再安装正式签名包；请提前保存文档。
+
 
 ## 为什么选择 MarkLite？
 
@@ -66,17 +96,18 @@
 
 ## 下载
 
-**MarkLite v0.1.6** · Windows、macOS 与 Linux。安装包和更新说明统一通过 GitHub Releases 提供。
+**MarkLite v0.1.7** · Windows、macOS、Linux 与 Android。安装包和更新说明统一通过 GitHub Releases 提供。
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows x64 | [`MarkLite_0.1.6_x64-setup.exe`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/MarkLite_0.1.6_x64-setup.exe) |
-| macOS Apple Silicon | [`MarkLite_0.1.6_macos_aarch64.dmg`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/MarkLite_0.1.6_macos_aarch64.dmg) |
-| macOS Intel | [`MarkLite_0.1.6_macos_x86_64.dmg`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/MarkLite_0.1.6_macos_x86_64.dmg) |
-| Linux x64 AppImage | [`MarkLite_0.1.6_linux_x86_64.AppImage`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/MarkLite_0.1.6_linux_x86_64.AppImage) |
-| Linux amd64 Debian | [`MarkLite_0.1.6_linux_amd64.deb`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/MarkLite_0.1.6_linux_amd64.deb) |
+| Windows x64 | [`MarkLite_0.1.7_x64-setup.exe`](https://github.com/Vazone/Marklite/releases/download/v0.1.7/MarkLite_0.1.7_x64-setup.exe) |
+| macOS Apple Silicon | [`MarkLite_0.1.7_macos_aarch64.dmg`](https://github.com/Vazone/Marklite/releases/download/v0.1.7/MarkLite_0.1.7_macos_aarch64.dmg) |
+| macOS Intel | [`MarkLite_0.1.7_macos_x86_64.dmg`](https://github.com/Vazone/Marklite/releases/download/v0.1.7/MarkLite_0.1.7_macos_x86_64.dmg) |
+| Linux x64 AppImage | [`MarkLite_0.1.7_linux_x86_64.AppImage`](https://github.com/Vazone/Marklite/releases/download/v0.1.7/MarkLite_0.1.7_linux_x86_64.AppImage) |
+| Linux amd64 Debian | [`MarkLite_0.1.7_linux_amd64.deb`](https://github.com/Vazone/Marklite/releases/download/v0.1.7/MarkLite_0.1.7_linux_amd64.deb) |
+| Android ARM64 | [`MarkLite_0.1.7_android_arm64.apk`](https://github.com/Vazone/Marklite/releases/download/v0.1.7/MarkLite_0.1.7_android_arm64.apk) |
 
-请使用 [`SHA256SUMS.txt`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/SHA256SUMS.txt) 核验下载文件，完整更新内容见 [v0.1.6 Release](https://github.com/Vazone/Marklite/releases/tag/v0.1.6)。
+请使用 [`SHA256SUMS.txt`](https://github.com/Vazone/Marklite/releases/download/v0.1.7/SHA256SUMS.txt) 核验下载文件，完整更新内容见 [v0.1.7 Release](https://github.com/Vazone/Marklite/releases/tag/v0.1.7)。
 
 ## 技术架构
 
@@ -114,7 +145,10 @@ npm run dev
 
 ```bash
 npm run check
+npm test
+npm run test:tooling
 npm run build
+npm run build:cli
 cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 cargo test --manifest-path src-tauri/Cargo.toml --locked --all-features
 ```
@@ -125,7 +159,19 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked --all-features
 npm run package:windows
 ```
 
-各平台安装包通过 GitHub Actions 构建；Windows、Linux 和 macOS 两种架构的构建全部完成后，再发布 Release 资产。
+CI 和 Release 仅手动触发。Actions 构建四个桌面目标及 Android ARM64 未签名 APK；APK 在维护者本机签名，全部产物核验后再发布。
+
+### 构建 Android
+
+安装 JDK 17，并按 [toolchain.json](scripts/android/toolchain.json) 安装 SDK、Build Tools 和 NDK，配置 `JAVA_HOME`、`ANDROID_HOME` 和 `NDK_HOME`。
+
+```bash
+rustup target add aarch64-linux-android
+npm ci
+npm run android:build -- --target aarch64 --debug
+```
+
+本地测试 APK 输出到 `release/android/arm64/`。手动 Release 工作流输出未签名的优化 APK，由维护者本机签名后发布；私钥不会上传 Actions。
 
 ## 参与贡献
 

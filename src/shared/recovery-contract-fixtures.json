@@ -1,0 +1,40 @@
+{
+  "snapshot": {
+    "id": "fixture-recovery",
+    "revision": 3,
+    "resource": {
+      "kind": "desktopFile",
+      "path": "C:\\notes\\recovery.md"
+    },
+    "title": "Recovery.md",
+    "content": "# Recover\n\nUnsaved content.",
+    "baseFileIdentity": "test-file-identity",
+    "baseContentVersion": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "receipt": {
+    "id": "fixture-recovery",
+    "revision": 3,
+    "checksum": "sha256:7bb1afec4d4bc05bc0ec4802ac1351f0afc66cff390b8c78b8b1e0e803bf4c3b",
+    "updatedAt": "2026-09-23T00:00:00Z"
+  },
+  "inventory": {
+    "entries": [
+      {
+        "receipt": {
+          "id": "fixture-recovery",
+          "revision": 3,
+          "checksum": "sha256:7bb1afec4d4bc05bc0ec4802ac1351f0afc66cff390b8c78b8b1e0e803bf4c3b",
+          "updatedAt": "2026-09-23T00:00:00Z"
+        },
+        "title": "Recovery.md",
+        "resource": {
+          "kind": "desktopFile",
+          "path": "C:\\notes\\recovery.md"
+        },
+        "contentBytes": 27,
+        "stale": false
+      }
+    ],
+    "issues": []
+  }
+}

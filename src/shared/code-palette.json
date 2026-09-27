@@ -1,0 +1,8 @@
+[
+  { "classes": ["tok-keyword", "tok-operator"], "light": "8250DF", "dark": "D2A8FF" },
+  { "classes": ["tok-string", "tok-string2"], "light": "0A3069", "dark": "A5D6FF" },
+  { "classes": ["tok-comment"], "light": "59636E", "dark": "9198A1" },
+  { "classes": ["tok-number", "tok-bool", "tok-atom"], "light": "0550AE", "dark": "79C0FF" },
+  { "classes": ["tok-typeName", "tok-className"], "light": "953800", "dark": "FFA657" },
+  { "classes": ["tok-propertyName", "tok-tagName"], "light": "116329", "dark": "7EE787" }
+]

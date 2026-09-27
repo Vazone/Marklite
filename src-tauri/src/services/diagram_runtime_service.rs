@@ -54,8 +54,34 @@ struct PackFile {
 pub fn status(root: &Path) -> DiagramRuntimeStatus {
     DiagramRuntimeStatus {
         renderer_id: RENDERER_ID.to_string(),
-        installed: load_from_root(root).is_ok(),
+        installed: load_for_current_platform(root).is_ok(),
     }
+}
+
+pub fn load_for_current_platform(root: &Path) -> Result<DiagramRuntimeAsset, AppError> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = root;
+        let package: serde_json::Value =
+            serde_json::from_str(include_str!("../../../node_modules/mermaid/package.json"))
+                .map_err(|_| invalid())?;
+        if package["version"].as_str() != Some(VERSION) {
+            return Err(invalid());
+        }
+        let script = include_str!("../../../node_modules/mermaid/dist/mermaid.min.js");
+        if script.len() > MAX_SCRIPT_BYTES as usize
+            || format!("{:x}", Sha256::digest(script.as_bytes()))
+                != "581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8"
+        {
+            return Err(invalid());
+        }
+        Ok(DiagramRuntimeAsset {
+            renderer_id: RENDERER_ID.to_string(),
+            script_utf8: script.to_owned(),
+        })
+    }
+    #[cfg(not(target_os = "android"))]
+    load_from_root(root)
 }
 
 pub fn load_from_root(root: &Path) -> Result<DiagramRuntimeAsset, AppError> {

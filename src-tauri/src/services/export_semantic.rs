@@ -1,9 +1,10 @@
+use crate::models::markdown_event::Event;
 use std::collections::HashMap;
 
-use pulldown_cmark::{CodeBlockKind, Event, Tag};
+use pulldown_cmark::{CodeBlockKind, Tag};
 
 use crate::{
-    models::{diagram::DiagramSource, export::ExportWarning},
+    models::{diagram::DiagramSource, export::ExportWarning, markdown::SourceBlock},
     services::{
         export_resources::{resolve_export_link, ExportLink},
         markdown_service,
@@ -14,11 +15,23 @@ pub(crate) type NodeId = usize;
 
 #[derive(Debug, Clone)]
 pub(crate) enum SemanticNode {
+    Highlight {
+        children: Vec<NodeId>,
+    },
     Element {
         tag: Tag<'static>,
         children: Vec<NodeId>,
     },
     Event(Event<'static>),
+}
+
+impl SemanticNode {
+    pub(crate) fn children(&self) -> &[NodeId] {
+        match self {
+            Self::Element { children, .. } | Self::Highlight { children } => children,
+            Self::Event(_) => &[],
+        }
+    }
 }
 
 /// Flat, index-addressed representation of the Markdown event hierarchy.
@@ -28,27 +41,61 @@ pub(crate) enum SemanticNode {
 /// recursive call chain on the process stack.
 #[derive(Debug, Clone)]
 pub(crate) struct SemanticDocument {
+    code_cache: std::sync::Arc<std::sync::Mutex<super::code_highlight::CodeCache>>,
+    warnings: Vec<ExportWarning>,
     nodes: Vec<SemanticNode>,
     roots: Vec<NodeId>,
     link_targets: HashMap<NodeId, Result<ExportLink, ExportWarning>>,
     diagram_sources: HashMap<NodeId, DiagramSource>,
     footnote_numbers: HashMap<String, usize>,
+    source_blocks: Vec<SourceBlock>,
+    node_blocks: Vec<Option<usize>>,
 }
 
 impl SemanticDocument {
+    pub(crate) fn code_tokens(
+        &self,
+        source: &str,
+        info: &str,
+    ) -> Result<std::sync::Arc<[super::code_highlight::CodeToken]>, String> {
+        self.code_cache
+            .lock()
+            .map_err(|_| "Code highlight cache lock failed".to_string())?
+            .get(source, info)
+    }
     pub(crate) fn parse(markdown: &str, source_path: Option<&str>) -> Self {
+        let normalized = markdown_service::normalized_document(markdown);
         let mut document = Self {
+            code_cache: Default::default(),
+            warnings: normalized
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| {
+                    ExportWarning::new(
+                        diagnostic.code,
+                        format!(
+                            "{} (line {}, column {})",
+                            diagnostic.message, diagnostic.line, diagnostic.column
+                        ),
+                        Some(format!(
+                            "line:{}:column:{}",
+                            diagnostic.line, diagnostic.column
+                        )),
+                    )
+                })
+                .collect(),
             nodes: Vec::new(),
             roots: Vec::new(),
             link_targets: HashMap::new(),
             diagram_sources: HashMap::new(),
             footnote_numbers: HashMap::new(),
+            source_blocks: normalized.source_blocks,
+            node_blocks: Vec::new(),
         };
         let mut parents = Vec::new();
-        let (events, diagrams) = markdown_service::normalized_markdown_with_diagrams(markdown);
-        let mut diagrams = diagrams.into_iter();
+        let mut diagrams = normalized.diagrams.into_iter();
 
-        for event in events {
+        for (event, block) in normalized.events.into_iter().zip(normalized.event_blocks) {
             if let Event::FootnoteReference(label) | Event::Start(Tag::FootnoteDefinition(label)) =
                 &event
             {
@@ -59,6 +106,19 @@ impl SemanticDocument {
                     .or_insert(next);
             }
             match event {
+                Event::StartHighlight => {
+                    let id = document.push_node(
+                        parents.last().copied(),
+                        SemanticNode::Highlight {
+                            children: Vec::new(),
+                        },
+                        block,
+                    );
+                    parents.push(id);
+                }
+                Event::EndHighlight => {
+                    parents.pop();
+                }
                 Event::Start(tag) => {
                     let link = match &tag {
                         Tag::Link { dest_url, .. } => {
@@ -72,8 +132,17 @@ impl SemanticDocument {
                             tag,
                             children: Vec::new(),
                         },
+                        block,
                     );
-                    if let Some(link) = link {
+                    if let Some(mut link) = link {
+                        if let Err(warning) = &mut link {
+                            if let Some(source) = document.source_block(id) {
+                                warning.message = format!(
+                                    "{}（所在源块起始行：{}）",
+                                    warning.message, source.start_line
+                                );
+                            }
+                        }
                         document.link_targets.insert(id, link);
                     }
                     if matches!(
@@ -93,7 +162,7 @@ impl SemanticDocument {
                     parents.pop();
                 }
                 event => {
-                    document.push_node(parents.last().copied(), SemanticNode::Event(event));
+                    document.push_node(parents.last().copied(), SemanticNode::Event(event), block);
                 }
             }
         }
@@ -101,12 +170,24 @@ impl SemanticDocument {
         document
     }
 
-    fn push_node(&mut self, parent: Option<NodeId>, node: SemanticNode) -> NodeId {
+    pub(crate) fn warnings(&self) -> &[ExportWarning] {
+        &self.warnings
+    }
+
+    fn push_node(
+        &mut self,
+        parent: Option<NodeId>,
+        node: SemanticNode,
+        block: Option<usize>,
+    ) -> NodeId {
         let id = self.nodes.len();
         self.nodes.push(node);
+        self.node_blocks.push(block);
         if let Some(parent) = parent {
             match &mut self.nodes[parent] {
-                SemanticNode::Element { children, .. } => children.push(id),
+                SemanticNode::Element { children, .. } | SemanticNode::Highlight { children } => {
+                    children.push(id)
+                }
                 SemanticNode::Event(_) => unreachable!("events cannot own semantic children"),
             }
         } else {
@@ -125,7 +206,18 @@ impl SemanticDocument {
     pub(crate) fn append_fragment_node(&mut self, node: SemanticNode) -> NodeId {
         let id = self.nodes.len();
         self.nodes.push(node);
+        self.node_blocks.push(None);
         id
+    }
+
+    /// Source block containing an original node, not an exact inline-token span.
+    /// Generated pagination nodes have no source origin unless explicitly derived.
+    pub(crate) fn source_block(&self, id: NodeId) -> Option<&SourceBlock> {
+        self.node_blocks
+            .get(id)
+            .copied()
+            .flatten()
+            .and_then(|block| self.source_blocks.get(block))
     }
 
     pub(crate) fn replace_roots(&mut self, roots: Vec<NodeId>) {
@@ -159,7 +251,7 @@ impl SemanticDocument {
         let mut pending = roots.iter().rev().copied().collect::<Vec<_>>();
         while let Some(id) = pending.pop() {
             match self.node(id) {
-                SemanticNode::Element { children, .. } => {
+                SemanticNode::Element { children, .. } | SemanticNode::Highlight { children } => {
                     pending.extend(children.iter().rev().copied());
                 }
                 SemanticNode::Event(event) => text.push_str(&event_text(event)),
@@ -176,6 +268,12 @@ impl SemanticDocument {
 
 pub(crate) fn event_text(event: &Event<'_>) -> String {
     match event {
+        Event::Toc(toc) => toc
+            .headings()
+            .iter()
+            .map(|heading| heading.title.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
         Event::Text(value)
         | Event::Code(value)
         | Event::InlineMath(value)
@@ -192,7 +290,9 @@ pub(crate) fn event_text(event: &Event<'_>) -> String {
                 "☐ ".to_string()
             }
         }
-        Event::Start(_) | Event::End(_) => String::new(),
+        Event::Start(_) | Event::End(_) | Event::StartHighlight | Event::EndHighlight => {
+            String::new()
+        }
     }
 }
 
@@ -284,6 +384,90 @@ mod tests {
         assert!(document
             .plain_text(document.roots())
             .contains("https://code.example writer@code.example"));
+    }
+
+    #[test]
+    fn semantic_nodes_retain_shared_source_blocks_without_reparsing() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../src/shared/markdown-boundary-fixtures.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            let source = case["source"].as_str().unwrap();
+            let document = SemanticDocument::parse(source, None);
+            let full = crate::services::markdown_service::render_markdown(source).unwrap();
+            assert_eq!(
+                document.roots.len(),
+                full.source_blocks.len(),
+                "{}",
+                case["id"]
+            );
+            for (id, expected) in document.roots.iter().zip(&full.source_blocks) {
+                assert_eq!(
+                    serde_json::to_value(document.source_block(*id).unwrap()).unwrap(),
+                    serde_json::to_value(expected).unwrap()
+                );
+            }
+            for id in 0..document.nodes.len() {
+                let source_block = document
+                    .source_block(id)
+                    .expect("original node has block provenance");
+                assert!(source_block.start_utf16 < source_block.end_utf16);
+            }
+        }
+        let document = SemanticDocument::parse("# Before\n\n[blocked](javascript:alert(1))", None);
+        let warning = document
+            .link_targets
+            .values()
+            .next()
+            .unwrap()
+            .as_ref()
+            .unwrap_err();
+        assert!(warning.message.contains("所在源块起始行：3"));
+    }
+
+    #[test]
+    fn semantic_diagram_positions_match_preview_across_unicode_and_line_endings() {
+        for ending in ["\n", "\r\n", "\r"] {
+            let source = [
+                "# 中文😀",
+                "",
+                "- [link][ref]",
+                "  - nested",
+                "",
+                "```mermaid",
+                "flowchart TD",
+                "A-->B",
+                "```",
+                "",
+                "[ref]: https://example.com",
+                "",
+            ]
+            .join(ending);
+            let document = SemanticDocument::parse(&source, None);
+            let full = crate::services::markdown_service::render_markdown(&source).unwrap();
+            let (_, session) = crate::services::markdown_service::prepare_virtual_preview(
+                &source,
+                "semantic-positions".into(),
+            )
+            .unwrap();
+            let window = session.render_window(0, 1).unwrap();
+            assert_eq!(
+                serde_json::to_value(document.diagram_sources()).unwrap(),
+                serde_json::to_value(&full.diagrams).unwrap()
+            );
+            assert_eq!(
+                serde_json::to_value(&window.segments[0].diagrams).unwrap(),
+                serde_json::to_value(&full.diagrams).unwrap()
+            );
+            let diagram = &full.diagrams[0];
+            assert_eq!(
+                diagram.source_start_byte,
+                source.find("flowchart TD").unwrap()
+            );
+            assert!(source[diagram.source_start_byte..diagram.source_end_byte].contains("A-->B"));
+            assert_eq!(document.link_targets.len(), 1);
+        }
     }
 
     #[test]

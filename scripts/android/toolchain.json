@@ -1,0 +1,11 @@
+{
+  "jdk": "17.0.20.1",
+  "localJdkDirectory": "jdk-17.0.20.1+1",
+  "commandLineTools": "22.0",
+  "sdk": 36,
+  "buildTools": "36.0.0",
+  "libraryBuildTools": "35.0.0",
+  "ndk": "28.2.13676358",
+  "gradle": "8.14.3",
+  "androidGradlePlugin": "8.11.0"
+}

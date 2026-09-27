@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "android-mobile",
+  "description": "The main Android WebView may listen for pending system document intents.",
+  "windows": ["main"],
+  "platforms": ["android"],
+  "permissions": ["marklite-mobile:default"]
+}

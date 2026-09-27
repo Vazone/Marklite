@@ -1,0 +1,50 @@
+[
+  {
+    "id": "unicode-inline-code-and-escape",
+    "source": "# 中文😀\n\nParagraph with `==literal==` and \\*escaped\\*.\n",
+    "editorContains": ["ATXHeading1", "InlineCode", "Escape"],
+    "htmlContains": ["<code>==literal==</code>", "*escaped*"],
+    "htmlExcludes": ["<mark>", "<em>escaped</em>"],
+    "blocks": [{"text": "# 中文😀", "line": 1}, {"text": "Paragraph", "line": 3}]
+  },
+  {
+    "id": "fenced-extension-markers-stay-literal",
+    "source": "```md\n==mark== :smile: H~2~O x^2^ [TOC]\n```\n",
+    "editorContains": ["FencedCode"],
+    "htmlContains": ["==mark== :smile: H~2~O x^2^ [TOC]"],
+    "htmlExcludes": ["<mark>", "<sub>", "<sup>", "<nav"],
+    "blocks": [{"text": "```md", "line": 1}]
+  },
+  {
+    "id": "table-code-pipe-and-nested-style",
+    "source": "| A | B |\n| --- | --- |\n| `a\\|b` | **bold** |\n",
+    "editorContains": ["Table", "InlineCode", "StrongEmphasis"],
+    "htmlContains": ["<code>a|b</code>", "<strong>bold</strong>"],
+    "htmlExcludes": [],
+    "blocks": [{"text": "| A | B |", "line": 1}]
+  },
+  {
+    "id": "nested-list-and-global-reference",
+    "source": "- outer\n  - inner **bold**\n\n[中文😀][ref]\n\n[ref]: https://example.com\n",
+    "editorContains": ["BulletList", "StrongEmphasis", "Link", "LinkReference"],
+    "htmlContains": ["<strong>bold</strong>", "中文😀</a>"],
+    "htmlExcludes": [],
+    "blocks": [{"text": "- outer", "line": 1}, {"text": "[中文😀][ref]", "line": 4}]
+  },
+  {
+    "id": "footnote-before-definition",
+    "source": "Body[^n]\n\n[^n]: Footnote *text*\n",
+    "editorContains": ["Paragraph"],
+    "htmlContains": ["footnote-definition", "<em>text</em>"],
+    "htmlExcludes": [],
+    "blocks": [{"text": "Body", "line": 1}, {"text": "[^n]:", "line": 3}]
+  },
+  {
+    "id": "inline-extensions-with-empty-toc",
+    "source": "==marked== H~2~O x^2^ :smile:\n\n[TOC]\n",
+    "editorContains": ["Paragraph"],
+    "htmlContains": ["<mark>marked</mark> H<sub>2</sub>O x<sup>2</sup> 😄", "<ul class=\"document-toc\">\n</ul>"],
+    "htmlExcludes": ["<nav"],
+    "blocks": [{"text": "==marked==", "line": 1}, {"text": "[TOC]", "line": 3}]
+  }
+]

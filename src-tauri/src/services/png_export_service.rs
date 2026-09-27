@@ -1,17 +1,13 @@
-use std::{
-    collections::HashMap,
-    sync::{Mutex, OnceLock},
-};
-
+#[cfg(test)]
+use super::export_control::CaptureControl;
 use super::{
-    diagram_export_service::{self, DiagramExportMode},
+    export_control::{self, Registration},
     export_core, export_html_writer,
     export_progress::{ExportReporter, ExportStage, ExportWork, WorkKind},
     export_resources::ExportResourceResolver,
     export_semantic::SemanticDocument,
     pdf_artifact::PdfWorkspace,
     png_artifact::DirectoryArtifact,
-    png_capture::{self, CaptureControl},
     png_chapters,
 };
 use crate::models::{
@@ -19,49 +15,16 @@ use crate::models::{
     export::{ExportRequest, ExportResult},
 };
 
-fn jobs() -> &'static Mutex<HashMap<String, CaptureControl>> {
-    static JOBS: OnceLock<Mutex<HashMap<String, CaptureControl>>> = OnceLock::new();
-    JOBS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-struct Registration {
-    id: String,
-    control: CaptureControl,
-}
-impl Registration {
-    fn new(id: &str) -> Result<Self, AppError> {
-        let mut jobs = jobs().lock().unwrap_or_else(|e| e.into_inner());
-        if jobs.contains_key(id) {
-            return Err(AppError::new("EXPORT_JOB_EXISTS", "导出任务标识已在使用"));
-        }
-        let control = CaptureControl::default();
-        jobs.insert(id.to_owned(), control.clone());
-        Ok(Self {
-            id: id.to_owned(),
-            control,
-        })
-    }
-}
-impl Drop for Registration {
-    fn drop(&mut self) {
-        self.control.cancel();
-        jobs()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.id);
-    }
+pub fn request_cancel(job_id: &str) -> crate::models::export::ExportCancelStatus {
+    export_control::request_cancel(job_id)
 }
 
 pub fn cancel(job_id: &str) -> bool {
-    jobs()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(job_id)
-        .is_some_and(CaptureControl::cancel)
+    export_control::cancel(job_id)
 }
 
-pub async fn export_png(
-    app: &tauri::AppHandle,
+pub(crate) async fn export_png(
+    renderer: &impl crate::platform::render::ChapterRenderer,
     request: &ExportRequest,
     reporter: &ExportReporter,
 ) -> Result<ExportResult, AppError> {
@@ -79,16 +42,9 @@ pub async fn export_png(
     let warnings = {
         let rendering_target = output.stage().join("capture.png");
         reporter.phase(ExportStage::Resources);
-        let diagrams = diagram_export_service::prepare(
-            app,
-            &document,
-            &rendering_target,
-            false,
-            None,
-            || job.control.check().err(),
-            DiagramExportMode::Html,
-        )
-        .await?;
+        let diagrams = renderer
+            .prepare(&document, &rendering_target, &job.control)
+            .await?;
         let workspace = PdfWorkspace::create(&rendering_target)?;
         let mut resources = ExportResourceResolver::new(
             request.snapshot.source_path.as_deref(),
@@ -119,22 +75,22 @@ pub async fn export_png(
                     None,
                     request.options.include_title,
                 );
-                workspace.write_html(&png_capture::image_surface(&html))?;
+                workspace.write_html(&renderer.surface(&html))?;
             }
-            let image =
-                png_capture::capture(app, workspace.html_path(), &job.control, reporter, work)
-                    .await
-                    .map_err(|error| {
-                        AppError::new(
-                            error.code,
-                            format!(
-                                "第 {} 章（{}）：{}",
-                                index + 1,
-                                chapter.title,
-                                error.message
-                            ),
-                        )
-                    })?;
+            let image = renderer
+                .capture(workspace.html_path(), &job.control, reporter, work)
+                .await
+                .map_err(|error| {
+                    AppError::new(
+                        error.code,
+                        format!(
+                            "第 {} 章（{}）：{}",
+                            index + 1,
+                            chapter.title,
+                            error.message
+                        ),
+                    )
+                })?;
             job.control.check()?;
             reporter.processing(ExportStage::Writing, work);
             output.write_png(&chapter.filename, &image.bytes, image.width, image.height)?;
@@ -159,6 +115,61 @@ pub async fn export_png(
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct LateRenderer;
+    impl crate::platform::render::ChapterRenderer for LateRenderer {
+        async fn prepare(
+            &self,
+            _: &SemanticDocument,
+            _: &std::path::Path,
+            _: &CaptureControl,
+        ) -> Result<crate::models::diagram_assets::PreparedDiagrams, AppError> {
+            Ok(crate::models::diagram_assets::PreparedDiagrams::empty())
+        }
+        fn surface(&self, html: &str) -> String {
+            html.to_owned()
+        }
+        async fn capture(
+            &self,
+            _: &std::path::Path,
+            control: &CaptureControl,
+            _: &ExportReporter,
+            _: ExportWork,
+        ) -> Result<crate::services::export_control::CapturedImage, AppError> {
+            assert!(control.cancel());
+            Ok(crate::services::export_control::CapturedImage {
+                bytes: vec![],
+                width: 1,
+                height: 1,
+            })
+        }
+    }
+
+    #[test]
+    fn late_platform_result_after_cancel_never_publishes_a_directory() {
+        let directory = crate::utils::test_support::TestDirectory::new("png-late-result");
+        let target = directory.path().join("chapters");
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../src/shared/desktop-contract-fixtures.json"
+        ))
+        .unwrap();
+        let mut request: ExportRequest =
+            serde_json::from_value(fixture["exportRequest"].clone()).unwrap();
+        request.snapshot.job_id = "late-platform-result".into();
+        request.snapshot.title = "chapters.md".into();
+        request.snapshot.content = "# Chapter\n\nText".into();
+        request.snapshot.source_path = None;
+        request.target_path = target.to_str().unwrap().into();
+        request.target_kind = crate::models::export::ExportTargetKind::Directory;
+        request.format = crate::models::export::ExportFormat::Png;
+        let reporter = ExportReporter::silent(&request.snapshot.job_id, request.format);
+        let error = tauri::async_runtime::block_on(export_png(&LateRenderer, &request, &reporter))
+            .unwrap_err();
+        assert_eq!(error.code, "EXPORT_CANCELLED");
+        assert!(!target.exists());
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+        assert!(!cancel(&request.snapshot.job_id));
+    }
+
     #[test]
     fn job_identity_and_cancellation_have_one_commit_boundary() {
         let job = Registration::new("image-cancel-test").unwrap();
@@ -176,5 +187,20 @@ mod tests {
         let job = Registration::new("image-commit-test").unwrap();
         job.control.commit(|| Ok(())).unwrap();
         assert!(!cancel("image-commit-test"));
+    }
+
+    #[test]
+    fn acknowledgements_distinguish_registration_and_commit_boundaries() {
+        use crate::models::export::ExportCancelStatus::*;
+        assert_eq!(request_cancel("ack-cancel"), NotRunning);
+        let job = Registration::new("ack-cancel").unwrap();
+        assert_eq!(request_cancel("ack-cancel"), Requested);
+        assert_eq!(request_cancel("ack-cancel"), Requested);
+        assert!(job.control.commit(|| panic!("must not publish")).is_err());
+        drop(job);
+        assert_eq!(request_cancel("ack-cancel"), NotRunning);
+        let job = Registration::new("ack-committed").unwrap();
+        job.control.commit(|| Ok(())).unwrap();
+        assert_eq!(request_cancel("ack-committed"), TooLate);
     }
 }

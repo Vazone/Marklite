@@ -1,9 +1,164 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "profiles": {
     "commonmark": "CommonMark 0.31.2 syntax without product extensions",
     "gfm": "GFM 0.29-gfm extension syntax over the current CommonMark parser; 10 numbered differences are classified by the conformance gate",
-    "default": "GFM plus named MarkLite footnotes, definition lists, alerts, heading attributes, and bounded math"
+    "default": "GFM plus named MarkLite footnotes, definition lists, alerts, heading attributes, bounded math, offline gemoji shortcodes, and typed highlights"
+  },
+  "surfaces": [
+    "editor",
+    "preview",
+    "windowPreview",
+    "semantic",
+    "gui",
+    "cli",
+    "shell",
+    "html",
+    "pdf",
+    "docx",
+    "png",
+    "svg",
+    "androidPreview",
+    "androidExport"
+  ],
+  "surfaceEvidence": {
+    "editor": {
+      "implementation": [
+        "src/lib/editorMarkdownLanguage.ts",
+        "src/lib/markdownParser.ts",
+        "src/lib/markdownInline.ts"
+      ],
+      "tests": [
+        "src/lib/editorMarkdownLanguage.test.ts",
+        "src/lib/markdownInline.test.ts",
+        "src/lib/markdownParseTask.test.ts"
+      ],
+      "boundary": "GFM parse tree over source text; product extensions remain editable source unless explicitly configured."
+    },
+    "preview": {
+      "implementation": [
+        "src-tauri/src/services/markdown_service.rs"
+      ],
+      "tests": [
+        "src-tauri/src/services/markdown_service.rs"
+      ],
+      "boundary": "Sanitized HTML and bounded named extensions; parser conformance does not prove native font/layout behavior."
+    },
+    "windowPreview": {
+      "implementation": [
+        "src-tauri/src/services/markdown_service/preview.rs"
+      ],
+      "tests": [
+        "src-tauri/src/services/markdown_service/preview.rs"
+      ],
+      "boundary": "Shared analysis, global references and budgets; oversized nodes can become explicit source excerpts."
+    },
+    "semantic": {
+      "implementation": [
+        "src-tauri/src/services/export_semantic.rs"
+      ],
+      "tests": [
+        "src-tauri/src/services/export_semantic.rs",
+        "src-tauri/src/services/export_service.rs"
+      ],
+      "boundary": "Shared export event hierarchy with source-block UTF-16/line provenance. Diagram byte spans are exact; ordinary inline nodes identify their containing block, not an exact token range. Generated pagination nodes have no original source."
+    },
+    "gui": {
+      "implementation": [
+        "src/app/controllers/exportController.ts"
+      ],
+      "tests": [
+        "src/app/controllers/exportController.test.ts"
+      ],
+      "boundary": "Desktop controller dispatches shared exporters; native platform rendering needs runtime verification."
+    },
+    "cli": {
+      "implementation": [
+        "src-tauri/src/cli.rs"
+      ],
+      "tests": [
+        "scripts/test-cli.ps1"
+      ],
+      "boundary": "Desktop CLI entry; no Android CLI promise."
+    },
+    "shell": {
+      "implementation": [
+        "src-tauri/src/cli.rs"
+      ],
+      "tests": [
+        "scripts/test-windows-packaging.ps1"
+      ],
+      "boundary": "Windows shell launches desktop CLI; not a separate syntax engine."
+    },
+    "html": {
+      "implementation": [
+        "src-tauri/src/services/export_html_writer.rs"
+      ],
+      "tests": [
+        "src-tauri/src/services/export_service.rs"
+      ],
+      "boundary": "Sanitized export HTML; local resources and optional diagram pack remain conditional."
+    },
+    "pdf": {
+      "implementation": [
+        "src-tauri/src/services/pdf_export_service.rs"
+      ],
+      "tests": [
+        "src-tauri/src/services/export_service.rs"
+      ],
+      "boundary": "Native desktop print of prepared HTML; document budgets and cancellation apply."
+    },
+    "docx": {
+      "implementation": [
+        "src-tauri/src/services/export_docx_writer.rs"
+      ],
+      "tests": [
+        "src-tauri/src/services/export_service.rs"
+      ],
+      "boundary": "Semantic mapping; unsupported targets preserve visible content with warnings."
+    },
+    "png": {
+      "implementation": [
+        "src-tauri/src/services/png_export_service.rs",
+        "src-tauri/src/services/png_chapters.rs"
+      ],
+      "tests": [
+        "src-tauri/src/services/png_chapters.rs",
+        "src-tauri/src/services/png_artifact.rs"
+      ],
+      "boundary": "Chapter planning and bounded native capture of HTML; not an unbounded whole-document bitmap."
+    },
+    "svg": {
+      "implementation": [
+        "src-tauri/src/services/export_service.rs",
+        "src/lib/mindMapSvg.ts"
+      ],
+      "tests": [
+        "src/lib/mindMapSvg.test.ts",
+        "src-tauri/src/services/export_service.rs"
+      ],
+      "boundary": "Heading mind map only; body syntax is not represented as a full document export."
+    },
+    "androidPreview": {
+      "implementation": [
+        "src-tauri/src/services/markdown_service.rs",
+        "src-tauri/src/platform/capabilities.rs"
+      ],
+      "tests": [
+        "src-tauri/src/services/markdown_service.rs",
+        "src-tauri/src/platform/capabilities.rs"
+      ],
+      "boundary": "Shared parser available; per-feature native Android integration remains partial, especially optional diagram resources."
+    },
+    "androidExport": {
+      "implementation": [
+        "src-tauri/src/platform/capabilities.rs"
+      ],
+      "tests": [
+        "src-tauri/src/platform/capabilities.rs"
+      ],
+      "boundary": "Current Android export_formats is empty; no supported export format until the mobile export provider is implemented."
+    }
   },
   "surfaceDefaults": {
     "editor": "source",
@@ -13,7 +168,13 @@
     "shell": "windows",
     "html": "native",
     "pdf": "mapped",
-    "docx": "mapped"
+    "docx": "mapped",
+    "windowPreview": "native",
+    "semantic": "mapped",
+    "png": "mapped",
+    "svg": "degraded",
+    "androidPreview": "shared",
+    "androidExport": "unsupported"
   },
   "chapterOverrides": [
     {
@@ -23,7 +184,11 @@
         "preview": "filtered",
         "html": "filtered",
         "pdf": "filtered",
-        "docx": "degraded"
+        "docx": "degraded",
+        "windowPreview": "filtered",
+        "androidPreview": "filtered",
+        "png": "filtered",
+        "semantic": "degraded"
       }
     },
     {
@@ -33,7 +198,11 @@
         "preview": "filtered",
         "html": "filtered",
         "pdf": "filtered",
-        "docx": "degraded"
+        "docx": "degraded",
+        "windowPreview": "filtered",
+        "androidPreview": "filtered",
+        "png": "filtered",
+        "semantic": "degraded"
       }
     },
     {
@@ -43,7 +212,10 @@
         "preview": "conditional",
         "html": "conditional",
         "pdf": "conditional",
-        "docx": "conditional"
+        "docx": "conditional",
+        "windowPreview": "conditional",
+        "androidPreview": "conditional",
+        "png": "conditional"
       }
     },
     {
@@ -53,7 +225,11 @@
         "preview": "filtered",
         "html": "filtered",
         "pdf": "filtered",
-        "docx": "degraded"
+        "docx": "degraded",
+        "windowPreview": "filtered",
+        "androidPreview": "filtered",
+        "png": "filtered",
+        "semantic": "degraded"
       }
     },
     {
@@ -63,7 +239,11 @@
         "preview": "filtered",
         "html": "filtered",
         "pdf": "filtered",
-        "docx": "degraded"
+        "docx": "degraded",
+        "windowPreview": "filtered",
+        "androidPreview": "filtered",
+        "png": "filtered",
+        "semantic": "degraded"
       }
     },
     {
@@ -73,7 +253,11 @@
         "preview": "filtered",
         "html": "filtered",
         "pdf": "filtered",
-        "docx": "degraded"
+        "docx": "degraded",
+        "windowPreview": "filtered",
+        "androidPreview": "filtered",
+        "png": "filtered",
+        "semantic": "degraded"
       }
     },
     {
@@ -83,7 +267,10 @@
         "preview": "conditional",
         "html": "conditional",
         "pdf": "conditional",
-        "docx": "conditional"
+        "docx": "conditional",
+        "windowPreview": "conditional",
+        "androidPreview": "conditional",
+        "png": "conditional"
       }
     },
     {
@@ -97,6 +284,28 @@
   ],
   "namedExtensions": [
     {
+      "id": "code-highlighting",
+      "fixture": "```js\nconst x = 1;\n```",
+      "expectedConfiguredContains": "<code class=\"language-js\">const x = 1;",
+      "statuses": {
+        "editor": "conditional",
+        "preview": "conditional",
+        "windowPreview": "conditional",
+        "semantic": "source",
+        "html": "conditional",
+        "pdf": "conditional",
+        "docx": "conditional",
+        "png": "conditional",
+        "gui": "shared",
+        "cli": "shared",
+        "shell": "windows",
+        "svg": "degraded",
+        "androidPreview": "shared",
+        "androidExport": "unsupported"
+      },
+      "boundary": "Fixed local JS/TS, JSON, HTML/CSS, Rust, Python, Shell, SQL and YAML; viewport Lezer workers and native Tree-sitter export map shared color intents. Unknown/over-budget blocks retain full text; export failures warn. Standard parser output retains source; coloring is a display/writer layer. Windows native verified; Android compile only."
+    },
+    {
       "id": "footnotes",
       "fixture": "Body[^n]\n\n[^n]: Footnote text",
       "expectedConfiguredContains": "class=\"footnote-definition\"",
@@ -108,9 +317,15 @@
         "shell": "windows",
         "html": "native",
         "pdf": "mapped",
-        "docx": "mapped"
+        "docx": "mapped",
+        "windowPreview": "native",
+        "semantic": "mapped",
+        "png": "mapped",
+        "svg": "degraded",
+        "androidPreview": "shared",
+        "androidExport": "unsupported"
       },
-      "boundary": "DOCX footnote hyperlinks degrade to visible label and destination with a warning"
+      "boundary": "DOCX footnote external/mail links own footnotes.xml.rels relationships; anchors reference document bookmarks; images and links share the part scope"
     },
     {
       "id": "definition-lists",
@@ -124,7 +339,13 @@
         "shell": "windows",
         "html": "native",
         "pdf": "mapped",
-        "docx": "mapped"
+        "docx": "mapped",
+        "windowPreview": "native",
+        "semantic": "mapped",
+        "png": "mapped",
+        "svg": "degraded",
+        "androidPreview": "shared",
+        "androidExport": "unsupported"
       },
       "boundary": "DOCX maps terms and every definition paragraph to separate paragraphs with definition indentation"
     },
@@ -140,7 +361,13 @@
         "shell": "windows",
         "html": "native",
         "pdf": "mapped",
-        "docx": "mapped"
+        "docx": "mapped",
+        "windowPreview": "native",
+        "semantic": "mapped",
+        "png": "mapped",
+        "svg": "degraded",
+        "androidPreview": "shared",
+        "androidExport": "unsupported"
       },
       "boundary": "Only five named alert kinds are recognized; DOCX emits a visible kind label followed by indented alert paragraphs"
     },
@@ -156,7 +383,13 @@
         "shell": "windows",
         "html": "native",
         "pdf": "mapped",
-        "docx": "mapped"
+        "docx": "mapped",
+        "windowPreview": "native",
+        "semantic": "mapped",
+        "png": "mapped",
+        "svg": "degraded",
+        "androidPreview": "shared",
+        "androidExport": "unsupported"
       },
       "boundary": "DOCX maps heading IDs to unique internal bookmarks"
     },
@@ -173,9 +406,15 @@
         "shell": "windows",
         "html": "conditional",
         "pdf": "conditional",
-        "docx": "conditional"
+        "docx": "conditional",
+        "windowPreview": "conditional",
+        "semantic": "conditional",
+        "png": "conditional",
+        "svg": "degraded",
+        "androidPreview": "shared",
+        "androidExport": "unsupported"
       },
-      "boundary": "Named MathML/OMML intersection and matrix/align environments; per-formula/document budgets; invalid input remains visible with positioned MATH_* warning"
+      "boundary": "Named MathML/OMML intersection and matrix/align/cases environments, covered by shared math fixtures; per-formula/document budgets; invalid input remains visible with positioned MATH_* warning"
     },
     {
       "id": "mermaid",
@@ -189,7 +428,13 @@
         "shell": "windows",
         "html": "conditional",
         "pdf": "conditional",
-        "docx": "conditional"
+        "docx": "conditional",
+        "windowPreview": "conditional",
+        "semantic": "conditional",
+        "png": "conditional",
+        "svg": "degraded",
+        "androidPreview": "source",
+        "androidExport": "unsupported"
       },
       "boundary": "Compatible optional offline Mermaid pack renders a verified SVG in preview/HTML/PDF; DOCX embeds a derived PNG. Missing pack or syntax error preserves fenced source and reports a diagnostic or export warning"
     },
@@ -205,89 +450,125 @@
         "shell": "windows",
         "html": "native",
         "pdf": "mapped",
-        "docx": "mapped"
+        "docx": "mapped",
+        "windowPreview": "native",
+        "semantic": "mapped",
+        "png": "mapped",
+        "svg": "degraded",
+        "androidPreview": "shared",
+        "androidExport": "unsupported"
       },
       "boundary": "Unicode characters are ordinary text; font coverage is reader dependent"
     },
     {
       "id": "emoji-shortcodes",
       "fixture": ":smile: unknown :not_a_name:",
-      "expectedConfiguredContains": ":not_a_name:",
+      "expectedConfiguredContains": "😄 unknown :not_a_name:",
       "statuses": {
-        "editor": "source",
-        "preview": "source",
-        "gui": "source",
-        "cli": "source",
+        "editor": "native",
+        "preview": "native",
+        "gui": "shared",
+        "cli": "shared",
         "shell": "windows",
-        "html": "source",
-        "pdf": "source",
-        "docx": "source"
+        "html": "native",
+        "pdf": "mapped",
+        "docx": "mapped",
+        "windowPreview": "native",
+        "semantic": "mapped",
+        "png": "mapped",
+        "svg": "degraded",
+        "androidPreview": "shared",
+        "androidExport": "unsupported"
       },
-      "boundary": "Not part of CommonMark/GFM; no stable local shortcode registry is promised in this batch"
+      "boundary": "Offline gemoji 4.1.0 registry (MIT), 1913 case-sensitive aliases. Unknown or escaped codes, code, math, raw HTML and URL targets stay literal. The original Markdown is unchanged. Editor and its worker use the same registry and protected source nodes; PDF/PNG inherit HTML text and still depend on platform fonts."
     },
     {
       "id": "highlight-syntax",
       "fixture": "==marked==",
-      "expectedConfiguredContains": "==marked==",
+      "expectedConfiguredContains": "<mark>marked</mark>",
       "statuses": {
-        "editor": "source",
-        "preview": "source",
-        "gui": "source",
-        "cli": "source",
+        "editor": "native",
+        "preview": "native",
+        "gui": "shared",
+        "cli": "shared",
         "shell": "windows",
-        "html": "source",
-        "pdf": "source",
-        "docx": "source"
+        "html": "native",
+        "pdf": "mapped",
+        "docx": "mapped",
+        "windowPreview": "native",
+        "semantic": "mapped",
+        "png": "mapped",
+        "svg": "degraded",
+        "androidPreview": "shared",
+        "androidExport": "unsupported"
       },
-      "boundary": "GFM-only CodeMirror parser leaves double-equals markers as ordinary source; guide identifies this shorthand as unsupported"
+      "boundary": "Typed highlights within one native inline parent: exact double equals, non-whitespace inner edges, nested styles and links allowed. Code/math/HTML/URLs and escapes stay protected. HTML maps to mark and DOCX to yellow highlight; the editor retains source and colors Highlight nodes using the same parent boundaries."
     },
     {
       "id": "subscript-superscript",
       "fixture": "H~2~O and x^2^",
-      "expectedConfiguredContains": "H~2~O and x^2^",
+      "expectedConfiguredContains": "H<sub>2</sub>O and x<sup>2</sup>",
       "statuses": {
-        "editor": "source",
-        "preview": "source",
-        "gui": "source",
-        "cli": "source",
+        "editor": "native",
+        "preview": "native",
+        "gui": "shared",
+        "cli": "shared",
         "shell": "windows",
-        "html": "source",
-        "pdf": "source",
-        "docx": "source"
+        "html": "native",
+        "pdf": "mapped",
+        "docx": "mapped",
+        "windowPreview": "native",
+        "semantic": "mapped",
+        "png": "mapped",
+        "svg": "degraded",
+        "androidPreview": "shared",
+        "androidExport": "unsupported"
       },
-      "boundary": "Not enabled in the Rust or GFM-only CodeMirror profile; math uses bounded dollar syntax"
+      "boundary": "Single ~ and ^ within one native inline parent; no unescaped whitespace. Double ~~ remains strikeout. Code/math/HTML/URLs and escapes stay protected. HTML sub/sup and DOCX vertical alignment share semantic tags."
     },
     {
       "id": "front-matter",
       "fixture": "---\ntitle: Example\n---\nBody",
-      "expectedConfiguredContains": "<h2>title: Example</h2>",
+      "expectedConfiguredContains": "<p>Body</p>",
       "statuses": {
         "editor": "source",
-        "preview": "source",
-        "gui": "source",
-        "cli": "source",
+        "preview": "mapped",
+        "gui": "shared",
+        "cli": "shared",
         "shell": "windows",
-        "html": "source",
-        "pdf": "source",
-        "docx": "source"
+        "html": "mapped",
+        "pdf": "mapped",
+        "docx": "mapped",
+        "windowPreview": "mapped",
+        "semantic": "mapped",
+        "png": "mapped",
+        "svg": "degraded",
+        "androidPreview": "shared",
+        "androidExport": "unsupported"
       },
-      "boundary": "No metadata/config override channel; ordinary Markdown syntax applies"
+      "boundary": "Initial bounded YAML mappings are omitted from body rendering without changing source or settings. Invalid input remains visible. The editor preserves a bounded metadata source node; revision-bound preview diagnostics navigate to source lines. Shared export warnings preserve source locations and deduplicate across parts. Windows native preview and four-format export verified; metadata never configures the application."
     },
     {
       "id": "document-toc",
       "fixture": "[TOC]\n\n# Heading",
-      "expectedConfiguredContains": "<p>[TOC]</p>",
+      "expectedConfiguredContains": "<a href=\"#heading\">Heading</a>",
       "statuses": {
         "editor": "source",
-        "preview": "source",
-        "gui": "source",
-        "cli": "source",
+        "preview": "mapped",
+        "gui": "shared",
+        "cli": "shared",
         "shell": "windows",
-        "html": "source",
-        "pdf": "source",
-        "docx": "source"
+        "html": "mapped",
+        "pdf": "mapped",
+        "docx": "mapped",
+        "windowPreview": "mapped",
+        "semantic": "mapped",
+        "png": "mapped",
+        "svg": "degraded",
+        "androidPreview": "shared",
+        "androidExport": "unsupported"
       },
-      "boundary": "Sidebar outline exists; [TOC] does not insert a document block"
+      "boundary": "Root standalone [TOC] uses the full outline and stable targets. Preview uses bounded windows and shared heading-level styles. Code, escapes, lists and quotes are excluded. Windows four-format export and cross-part PDF destinations verified; Android export remains unsupported."
     }
   ]
 }

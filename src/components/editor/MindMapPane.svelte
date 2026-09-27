@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import type { OutlineItem } from '../../lib/tauriApi';
   import {
     buildMindMap,
@@ -11,9 +11,11 @@
     type MindMapNodeSize
   } from '../../lib/mindMap';
   import { translator } from '../../lib/i18n';
+  import { observePinch, type PinchGesture } from '../../lib/panePinchZoom';
 
   export let documentTitle: string;
   export let outline: OutlineItem[];
+  export let mobile = false;
   export let onJumpToLine: (line: number) => void;
 
   let collapsedIds = new Set<string>();
@@ -21,6 +23,11 @@
   let nodeSizeObserver: ResizeObserver | null = null;
   const observedNodeIds = new WeakMap<Element, string>();
   let panViewport: HTMLElement;
+  let zoomScale = 1;
+  let pinchStartScale = 1;
+  let pinchAnchorX = 0;
+  let pinchAnchorY = 0;
+  let pinchRevision = 0;
   let panPointerId: number | null = null;
   let panClientX = 0;
   let panClientY = 0;
@@ -87,14 +94,48 @@
     };
   }
 
-  function observeViewport(element: HTMLElement) {
+  function observeViewport(element: HTMLElement, enablePinch: boolean) {
     getNodeSizeObserver()?.observe(element);
     scheduleViewportProjection();
+    let stopPinch = enablePinch ? observePinch(element, handlePinch) : null;
     return {
+      update(nextEnablePinch: boolean) {
+        stopPinch?.();
+        stopPinch = nextEnablePinch ? observePinch(element, handlePinch) : null;
+        if (!nextEnablePinch) zoomScale = 1;
+        scheduleViewportProjection();
+      },
       destroy() {
+        stopPinch?.();
         nodeSizeObserver?.unobserve(element);
       }
     };
+  }
+
+  function handlePinch(gesture: PinchGesture) {
+    if (!panViewport || gesture.phase === 'end') return;
+    if (gesture.phase === 'start') {
+      if (panPointerId !== null && panViewport.hasPointerCapture?.(panPointerId)) {
+        panViewport.releasePointerCapture(panPointerId);
+      }
+      panPointerId = null;
+      const bounds = panViewport.getBoundingClientRect();
+      pinchStartScale = zoomScale;
+      pinchAnchorX = (panViewport.scrollLeft + gesture.clientX - bounds.left) / zoomScale;
+      pinchAnchorY = (panViewport.scrollTop + gesture.clientY - bounds.top) / zoomScale;
+      return;
+    }
+    zoomScale = Math.min(3, Math.max(1, pinchStartScale * gesture.ratio));
+    const revision = ++pinchRevision;
+    const bounds = panViewport.getBoundingClientRect();
+    const left = pinchAnchorX * zoomScale - (gesture.clientX - bounds.left);
+    const top = pinchAnchorY * zoomScale - (gesture.clientY - bounds.top);
+    void tick().then(() => {
+      if (revision !== pinchRevision || !panViewport) return;
+      panViewport.scrollLeft = left;
+      panViewport.scrollTop = top;
+      scheduleViewportProjection();
+    });
   }
 
   function scheduleViewportProjection() {
@@ -102,10 +143,10 @@
     projectionFrame = requestAnimationFrame(() => {
       projectionFrame = null;
       viewport = {
-        left: panViewport.scrollLeft,
-        top: panViewport.scrollTop,
-        width: panViewport.clientWidth || 1200,
-        height: panViewport.clientHeight || 800
+        left: panViewport.scrollLeft / zoomScale,
+        top: panViewport.scrollTop / zoomScale,
+        width: (panViewport.clientWidth || 1200) / zoomScale,
+        height: (panViewport.clientHeight || 800) / zoomScale
       };
     });
   }
@@ -128,6 +169,13 @@
   }
 
   function startCanvasPan(event: PointerEvent) {
+    if (event.pointerType === 'touch' && !event.isPrimary) {
+      if (panPointerId !== null && panViewport.hasPointerCapture?.(panPointerId)) {
+        panViewport.releasePointerCapture(panPointerId);
+      }
+      panPointerId = null;
+      return;
+    }
     const target = event.target as Element | null;
     if (
       event.button !== 0 ||
@@ -198,7 +246,7 @@
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div
       bind:this={panViewport}
-      use:observeViewport
+      use:observeViewport={mobile}
       class="mind-map-viewport"
       class:dragging={panPointerId !== null}
       role="region"
@@ -215,6 +263,7 @@
         class="mind-map-canvas"
         style:width={`${layout.width}px`}
         style:height={`${layout.height}px`}
+        style:zoom={zoomScale}
         data-total-layout-nodes={layout.nodes.length}
         data-rendered-layout-nodes={projection.nodes.length}
       >

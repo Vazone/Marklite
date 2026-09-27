@@ -1,19 +1,19 @@
 <script lang="ts">
   import type { CursorPosition, EditorScrollPosition } from '../app/stores/documentStore';
-  import type { SerializedEditorState } from '../lib/editorSession';
+  import type { EditorSnapshot } from '../lib/editorSession';
   import type { ToolbarAction } from '../lib/markdownToolbar';
   import type { AppSettings } from '../lib/tauriApi';
 
   export let tabId: string;
   export let value = '';
   export let settings: AppSettings;
-  export let serializedState: SerializedEditorState | null = null;
+  export let serializedState: EditorSnapshot | null = null;
   export let initialScrollPosition: EditorScrollPosition;
   export let onChange: (tabId: string, value: string, lineCount: number) => void;
   export let onDirty: (tabId: string) => void;
   export let onCursorChange: (tabId: string, position: CursorPosition) => void;
   export let onScrollSync: (tabId: string, position: EditorScrollPosition, userInitiated: boolean) => void;
-  export let onSessionChange: (tabId: string, state: SerializedEditorState) => void;
+  export let onSessionChange: (tabId: string, state: EditorSnapshot) => void;
 
   $: callbackCount = [onChange, onDirty, onCursorChange, onScrollSync, onSessionChange].length;
 

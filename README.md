@@ -2,7 +2,7 @@
   <img src="assets/marklite-icon.png" alt="MarkLite logo" width="112" />
   <h1>MarkLite</h1>
   <p><strong>Fast, focused Markdown editing—without the heavyweight workspace.</strong></p>
-  <p>A local-first desktop editor for writing, previewing, organizing, and exporting Markdown on Windows, macOS, and Linux.</p>
+  <p>A local-first Markdown editor for Windows, macOS, Linux, and Android: write, organize folders, preview, and export your documents.</p>
   <p>
     <a href="README.zh-CN.md">简体中文</a> ·
     <a href="README.en.md">English</a> ·
@@ -10,11 +10,11 @@
     <a href="https://github.com/Vazone/Marklite/issues">Issues</a>
   </p>
   <p>
-    <a href="https://github.com/Vazone/Marklite/releases"><img alt="GitHub release" src="https://img.shields.io/github/v/release/Vazone/Marklite?include_prereleases&sort=semver&style=flat-square&color=20b2aa" /></a>
-    <a href="https://github.com/Vazone/Marklite/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/Vazone/Marklite/actions/workflows/ci.yml/badge.svg?branch=branch" /></a>
-    <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/github/license/Vazone/Marklite?style=flat-square" /></a>
-    <a href="https://github.com/Vazone/Marklite/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/Vazone/Marklite?style=flat-square&logo=github" /></a>
-    <img alt="Platforms" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-4c566a?style=flat-square" />
+    <a href="https://github.com/Vazone/Marklite/releases">Releases</a> ·
+    <a href="https://github.com/Vazone/Marklite/actions/workflows/ci.yml">CI</a> ·
+    <a href="https://github.com/Vazone/Marklite/blob/branch/LICENSE">MIT license</a> ·
+    <a href="https://github.com/Vazone/Marklite/stargazers">Stars</a> ·
+    Windows · macOS · Linux · Android
   </p>
 </div>
 
@@ -22,6 +22,36 @@
   <img src="assets/marklite-showcase.gif" alt="MarkLite rendering formulas, scrolling in split view and selecting chapter PNG export in mixed-500-kib.md" width="100%" />
 </p>
 <p align="center"><sub>mixed-500-kib.md (500 KiB): math preview, split-view scrolling and chapter PNG export</sub></p>
+
+## What's new in 0.1.7
+
+- **A folder workspace:** reopen your last directory, browse Markdown files in a collapsible tree, filter the list, and reveal a file in the desktop file manager.
+- **Android joins the project:** open documents from the system file picker or file manager, grant access to a directory, save changes, and export through Android's document provider.
+- **More Markdown:** front matter, document tables of contents, footnotes, extended inline syntax, code highlighting, math, and Mermaid improvements.
+- **Safer writing:** recovery copies, external-change detection before overwriting, and better handling of recent and restored documents.
+- **Optional desktop updates:** background checks notify you of a new version; installation starts after your confirmation.
+- **Better DOCX output:** repeated diagrams, footnote images, editable formulas, and links receive export fixes.
+
+## From a folder to a finished document
+
+1. **Choose a directory** to make its Markdown documents available in the sidebar. Your directory selection is remembered across sessions.
+2. **Write in the layout you prefer:** editor, live preview, or split view. Open multiple documents and use the outline to navigate headings.
+3. **Export when ready:** HTML for sharing, PDF for reading, DOCX for further editing, SVG for a heading mind map, or PNG images by chapter.
+
+| Format | What you get |
+| --- | --- |
+| HTML | A standalone document with formatted content |
+| PDF | A paginated document, assembled from bounded render batches |
+| DOCX | An editable document with supported formulas and diagrams |
+| PNG | Chapter images grouped in a folder named after the document |
+| SVG | A vector mind map generated from document headings |
+
+### Android
+
+The ARM64 APK targets Android 7.0+ (API 24). File and folder access uses the system document picker; Android permissions and storage providers determine which locations are available. Portrait layout respects system bars; landscape provides more writing space. Recent files, directory restoration, touch gestures, and export share the editor's core capabilities.
+
+Desktop application updates and Android APK installation use different mechanisms: the APK is downloaded and installed through Android. An older debug-signed build may need to be uninstalled before installing the release-signed APK; save your documents first.
+
 
 ## Why MarkLite?
 
@@ -49,6 +79,7 @@
 - Browse recent files, document outline, document statistics, and many open tabs without crowding the editor.
 - Follow headings, supported local Markdown/text links, and HTTP/HTTPS links with typed navigation rules.
 - Display controlled local PNG, JPEG, GIF, and WebP images when local images are enabled.
+- Render Mermaid 11.17.2 diagrams offline after installing the optional local ZIP in **Settings → Preview**; diagrams keep their source visible when the pack is missing.
 - Turn the document heading hierarchy into a color-coded mind map with collapsible branches, drag-to-pan navigation, and jump-to-editor nodes.
 - Learn basic, extended, and mind-map syntax from the complete offline guide—no external tutorial required.
 
@@ -66,17 +97,18 @@
 
 ## Download
 
-**MarkLite v0.1.6** · Windows, macOS, and Linux. Packages and release notes are distributed through GitHub Releases.
+**MarkLite v0.1.7** · Windows, macOS, Linux, and Android. Packages and release notes are distributed through GitHub Releases.
 
 | Platform | Package |
 | --- | --- |
-| Windows x64 | [`MarkLite_0.1.6_x64-setup.exe`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/MarkLite_0.1.6_x64-setup.exe) |
-| macOS Apple Silicon | [`MarkLite_0.1.6_macos_aarch64.dmg`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/MarkLite_0.1.6_macos_aarch64.dmg) |
-| macOS Intel | [`MarkLite_0.1.6_macos_x86_64.dmg`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/MarkLite_0.1.6_macos_x86_64.dmg) |
-| Linux x64 AppImage | [`MarkLite_0.1.6_linux_x86_64.AppImage`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/MarkLite_0.1.6_linux_x86_64.AppImage) |
-| Linux amd64 Debian | [`MarkLite_0.1.6_linux_amd64.deb`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/MarkLite_0.1.6_linux_amd64.deb) |
+| Windows x64 | [`MarkLite_0.1.7_x64-setup.exe`](https://github.com/Vazone/Marklite/releases/download/v0.1.7/MarkLite_0.1.7_x64-setup.exe) |
+| macOS Apple Silicon | [`MarkLite_0.1.7_macos_aarch64.dmg`](https://github.com/Vazone/Marklite/releases/download/v0.1.7/MarkLite_0.1.7_macos_aarch64.dmg) |
+| macOS Intel | [`MarkLite_0.1.7_macos_x86_64.dmg`](https://github.com/Vazone/Marklite/releases/download/v0.1.7/MarkLite_0.1.7_macos_x86_64.dmg) |
+| Linux x64 AppImage | [`MarkLite_0.1.7_linux_x86_64.AppImage`](https://github.com/Vazone/Marklite/releases/download/v0.1.7/MarkLite_0.1.7_linux_x86_64.AppImage) |
+| Linux amd64 Debian | [`MarkLite_0.1.7_linux_amd64.deb`](https://github.com/Vazone/Marklite/releases/download/v0.1.7/MarkLite_0.1.7_linux_amd64.deb) |
+| Android ARM64 | [`MarkLite_0.1.7_android_arm64.apk`](https://github.com/Vazone/Marklite/releases/download/v0.1.7/MarkLite_0.1.7_android_arm64.apk) |
 
-Verify downloaded packages with [`SHA256SUMS.txt`](https://github.com/Vazone/Marklite/releases/download/v0.1.6/SHA256SUMS.txt), or read the complete [v0.1.6 release notes](https://github.com/Vazone/Marklite/releases/tag/v0.1.6).
+Verify downloaded packages with [`SHA256SUMS.txt`](https://github.com/Vazone/Marklite/releases/download/v0.1.7/SHA256SUMS.txt), or read the complete [v0.1.7 release notes](https://github.com/Vazone/Marklite/releases/tag/v0.1.7).
 
 ## Technology
 
@@ -110,11 +142,22 @@ Frontend-only development:
 npm run dev
 ```
 
+For offline Mermaid diagrams in a local desktop build, create the optional pack and select it in **Settings → Preview**:
+
+```bash
+npm run build:diagram-pack
+```
+
+The pack is written to `src-tauri/target/optional/mermaid-offline-11.17.2.zip`.
+
 Core validation:
 
 ```bash
 npm run check
+npm test
+npm run test:tooling
 npm run build
+npm run build:cli
 cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 cargo test --manifest-path src-tauri/Cargo.toml --locked --all-features
 ```
@@ -125,9 +168,7 @@ Build the verified Windows NSIS package:
 npm run package:windows
 ```
 
-Local installers are staged under `release/<platform>/<architecture>/` with SHA-256 sidecars. Windows uses `release/windows/x64/`. On Linux, run `npm run package:linux` to build and stage the AppImage and DEB in `release/linux/amd64/`. The `release/` directory is ignored by Git.
-
-Platform packages are built with GitHub Actions. Release assets are published after the Windows, Linux, and both macOS architecture builds complete.
+CI and Release workflows run only when manually dispatched. Release builds Windows x64, Linux x64, macOS Apple Silicon/Intel, and an ARM64 Android APK. The APK is signed locally before the complete release is published. Android private keys are never uploaded to Actions.
 
 ## Command-line export
 
@@ -139,6 +180,19 @@ The current source supports single-file HTML, DOCX and native PDF export:
 ```
 
 On macOS/Linux use `marklite --export "note.md" --format pdf`. Legacy `export ...` remains supported. Use `--json` for machine-readable output and `--help` for export options. On Windows, keep `marklite-cli.exe` beside `marklite.exe`.
+
+
+### Build Android
+
+Install JDK 17 and the SDK, Build Tools, and NDK versions in [toolchain.json](scripts/android/toolchain.json). Set `JAVA_HOME`, `ANDROID_HOME`, and `NDK_HOME`.
+
+```bash
+rustup target add aarch64-linux-android
+npm ci
+npm run android:build -- --target aarch64 --debug
+```
+
+Local test APKs are written to `release/android/arm64/`. The manual Release workflow produces an unsigned optimized APK for local signing by the maintainer.
 
 ## Contributing
 

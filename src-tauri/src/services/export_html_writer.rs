@@ -1,3 +1,4 @@
+use crate::models::markdown_event::{self as html, Event};
 use std::{
     collections::{HashMap, HashSet},
     sync::atomic::{AtomicU64, Ordering},
@@ -5,7 +6,7 @@ use std::{
 };
 
 use html_escape::encode_text;
-use pulldown_cmark::{html, CowStr, Event, Tag};
+use pulldown_cmark::{CowStr, Tag};
 
 use crate::{
     models::diagram::RenderedDiagram,
@@ -22,15 +23,25 @@ use crate::{
 
 static RESOURCE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
 pub(crate) fn render_body_with_diagrams(
     document: &SemanticDocument,
     request: &ExportRequest,
     diagrams: &HashMap<String, RenderedDiagram>,
 ) -> (String, Vec<ExportWarning>) {
-    let mut resources = ExportResourceResolver::new(
+    let resources = ExportResourceResolver::new(
         request.snapshot.source_path.as_deref(),
         request.options.include_local_images,
     );
+    render_body_with_resources(document, request, diagrams, resources)
+}
+
+pub(crate) fn render_body_with_resources(
+    document: &SemanticDocument,
+    request: &ExportRequest,
+    diagrams: &HashMap<String, RenderedDiagram>,
+    mut resources: ExportResourceResolver<'_>,
+) -> (String, Vec<ExportWarning>) {
     let body = render_roots_with_resources(
         document,
         document.roots(),
@@ -52,6 +63,9 @@ pub(crate) fn render_roots_with_resources(
     resources: &mut ExportResourceResolver<'_>,
     pdf_part: bool,
 ) -> String {
+    for warning in document.warnings() {
+        resources.warnings_mut().push(warning.clone());
+    }
     let token = format!(
         "{}-{}-{}",
         std::process::id(),
@@ -136,8 +150,8 @@ fn pdf_anchor_links(document: &SemanticDocument, roots: &[NodeId], body: &str) -
         {
             raw_ids.extend(html_ids(html));
         }
-        if let SemanticNode::Element { tag, children } = document.node(id) {
-            pending.extend(children.iter().copied());
+        pending.extend(document.node(id).children().iter().copied());
+        if let SemanticNode::Element { tag, .. } = document.node(id) {
             let anchor = match tag {
                 Tag::Heading { id: Some(id), .. } => Some(id),
                 Tag::FootnoteDefinition(id) => Some(id),
@@ -244,6 +258,7 @@ fn emit_html_nodes(
     enum Work {
         Node(NodeId),
         End(pulldown_cmark::TagEnd),
+        EndHighlight,
         CloseFootnote,
     }
 
@@ -255,6 +270,10 @@ fn emit_html_nodes(
         .collect::<Vec<_>>();
     while let Some(work) = pending.pop() {
         let node_id = match work {
+            Work::EndHighlight => {
+                events.push(Event::EndHighlight);
+                continue;
+            }
             Work::Node(id) => id,
             Work::End(end) => {
                 events.push(Event::End(end));
@@ -266,6 +285,11 @@ fn emit_html_nodes(
             }
         };
         match document.node(node_id) {
+            SemanticNode::Highlight { children } => {
+                events.push(Event::StartHighlight);
+                pending.push(Work::EndHighlight);
+                pending.extend(children.iter().rev().copied().map(Work::Node));
+            }
             SemanticNode::Element { tag, children } => match tag {
                 Tag::FootnoteDefinition(label) => {
                     let escaped = html_escape::encode_double_quoted_attribute(label);
@@ -295,6 +319,27 @@ fn emit_html_nodes(
                         pending.push(Work::End(tag.to_end()));
                         pending.extend(children.iter().rev().copied().map(Work::Node));
                     }
+                }
+                Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Fenced(info)) => {
+                    let text = document.plain_text(children);
+                    let code = match document.code_tokens(&text, info) {
+                        Ok(tokens) => super::code_highlight::html(&text, &tokens),
+                        Err(error) => {
+                            resources.warnings_mut().push(ExportWarning::new(
+                                "CODE_HIGHLIGHT_FAILED",
+                                error,
+                                None,
+                            ));
+                            encode_text(&text).into_owned()
+                        }
+                    };
+                    let language = html_escape::encode_double_quoted_attribute(
+                        info.split_whitespace().next().unwrap_or(""),
+                    );
+                    events.push(Event::Html(
+                        format!("<pre><code class=\"language-{language}\">{code}</code></pre>\n")
+                            .into(),
+                    ));
                 }
                 Tag::Image {
                     link_type,
@@ -441,6 +486,8 @@ pub(crate) fn standalone_with_title(
     include_title: bool,
 ) -> String {
     let safe_title = encode_text(&request.snapshot.title);
+    let toc_styles = include_str!("../../../src/shared/markdown-toc.css");
+    let code_styles = super::code_highlight::styles();
     let document_title = if include_title {
         format!(r#"<h1 class="document-title">{safe_title}</h1>"#)
     } else {
@@ -476,6 +523,8 @@ pub(crate) fn standalone_with_title(
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src {script_source}; font-src 'none'; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
   <title>{safe_title}</title>
   <style>
+    {toc_styles}
+    {code_styles}
     @page {{ size: {page_width} {page_height}; margin: {margin}; }}
     * {{ box-sizing: border-box; }}
     body {{ margin: 0; color: #1f2328; background: #fff; font: 16px/1.7 "Segoe UI", "PingFang SC", system-ui, sans-serif; overflow-wrap: anywhere; }}
@@ -487,7 +536,7 @@ pub(crate) fn standalone_with_title(
     table {{ border-collapse: collapse; width: 100%; break-inside: avoid; }}
     th, td {{ border: 1px solid #d0d7de; padding: 8px 10px; }}
     blockquote {{ margin-left: 0; padding-left: 16px; color: #57606a; border-left: 4px solid #d0d7de; }}
-    math[display="block"] {{ display: block; width: fit-content; max-width: 100%; margin: 1em auto; overflow-x: auto; overflow-y: hidden; }}
+    math[display="block"] {{ width: fit-content; max-width: 100%; margin: 1em auto; overflow-x: auto; overflow-y: hidden; }}
     .math-error {{ color: #b42318; border: 1px solid #f1aeb5; border-radius: 4px; padding: .1em .35em; background: #fff5f5; }}
     .mermaid-diagram {{ max-width: 100%; overflow-x: auto; margin: 1.5em 0; break-inside: avoid; }}
     .mermaid-diagram svg {{ display: block; height: auto; max-width: none; margin: auto; }}

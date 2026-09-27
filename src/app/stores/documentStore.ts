@@ -6,16 +6,18 @@ import {
   type DiagramSource,
   type DocumentStats,
   type MarkdownAnalysisDto,
+  type MarkdownDiagnostic,
   type OutlineItem,
   type RenderedMarkdownDto,
   type SanitizedMarkdownHtml,
   type SourceBlock,
   type VirtualPreviewIndex
 } from '../../lib/tauriApi';
-import type { SerializedEditorState } from '../../lib/editorSession';
+import type { EditorSnapshot } from '../../lib/editorSession';
 import { isSameFileIdentity, isSameFilePath } from '../../lib/filePathIdentity';
 import { distinctProjection } from '../../lib/distinctProjection';
 import { t } from '../../lib/i18n';
+import { desktopFile, documentResource, isSameResource, type ResourceRef } from '../../lib/platform/resources';
 
 export type CursorPosition = {
   line: number;
@@ -36,6 +38,7 @@ export type DocumentLoadState = 'loaded' | 'unloaded' | 'loading' | 'error';
 
 export type EditorTab = {
   id: string;
+  resource: ResourceRef | null;
   path: string | null;
   fileIdentity: string | null;
   contentVersion: string | null;
@@ -50,12 +53,13 @@ export type EditorTab = {
   fileSize: number | null;
   cursorPosition: CursorPosition;
   scrollPosition: EditorScrollPosition;
-  editorState: SerializedEditorState | null;
+  editorState: EditorSnapshot | null;
   html: SanitizedMarkdownHtml;
   sourceBlocks: SourceBlock[];
   virtualPreview: VirtualPreviewIndex | null;
   diagrams: DiagramSource[];
   diagramDiagnostics: DiagramDiagnostic[];
+  markdownDiagnostics?: MarkdownDiagnostic[];
   renderedRevision: number;
   analysisRevision: number;
   outline: OutlineItem[];
@@ -77,6 +81,11 @@ export type DocumentSessionProjection = {
   activePath: string | null;
 };
 
+export type ResourceSessionProjection = {
+  resources: ResourceRef[];
+  activeResource: ResourceRef | null;
+};
+
 export type ActiveDocumentShell = Pick<
   EditorTab,
   'id' | 'path' | 'title' | 'isDirty' | 'loadState' | 'loadError'
@@ -94,7 +103,7 @@ export type ActiveRenderDocument = Pick<
 
 export type ActivePreviewDocument = Pick<
   EditorTab,
-  'id' | 'path' | 'title' | 'html' | 'sourceBlocks' | 'virtualPreview' | 'diagrams' | 'diagramDiagnostics' | 'renderedRevision' | 'contentRevision' | 'outline' | 'loadState'
+  'id' | 'path' | 'resource' | 'title' | 'html' | 'sourceBlocks' | 'virtualPreview' | 'diagrams' | 'diagramDiagnostics' | 'markdownDiagnostics' | 'analysisRevision' | 'renderedRevision' | 'contentRevision' | 'outline' | 'loadState'
 >;
 
 export type SidebarDocumentView = Pick<
@@ -112,7 +121,7 @@ export type SidebarDocumentView = Pick<
 
 export type StatusDocumentView = Pick<
   EditorTab,
-  'path' | 'isDirty' | 'loadState' | 'stats' | 'cursorPosition'
+  'title' | 'path' | 'isDirty' | 'loadState' | 'stats' | 'cursorPosition'
 >;
 
 const emptyStats: DocumentStats = {
@@ -146,6 +155,7 @@ function createTab(document: CreateTabInput = {}): EditorTab {
   return {
     id: createId(),
     path: document.path ?? null,
+    resource: documentResource({ path: document.path ?? null, resource: document.resource }),
     fileIdentity: document.fileIdentity ?? null,
     contentVersion: document.contentVersion ?? null,
     title: document.title ?? 'Untitled.md',
@@ -165,6 +175,7 @@ function createTab(document: CreateTabInput = {}): EditorTab {
     virtualPreview: null,
     diagrams: [],
     diagramDiagnostics: [],
+    markdownDiagnostics: [],
     renderedRevision: -1,
     analysisRevision: -1,
     outline: [],
@@ -191,11 +202,19 @@ function createDeferredTab(path: string): EditorTab {
   });
 }
 
+function createDeferredResourceTab(resource: ResourceRef): EditorTab {
+  if (resource.kind === 'desktopFile') return createDeferredTab(resource.path);
+  return createTab({ path: null, resource, title: 'Document.md', content: '',
+    isDirty: false, isWelcome: false, loadState: 'unloaded' });
+}
+
 function hydrateTab(tab: EditorTab, document: DocumentDto): EditorTab {
   const content = document.content;
+  const unchanged = tab.loadState !== 'loaded' && tab.contentVersion === document.contentVersion;
   return {
     ...tab,
     path: document.path,
+    resource: documentResource({ path: document.path ?? null, resource: document.resource }),
     fileIdentity: document.fileIdentity,
     contentVersion: document.contentVersion,
     title: document.title,
@@ -207,14 +226,15 @@ function hydrateTab(tab: EditorTab, document: DocumentDto): EditorTab {
     loadError: null,
     lastSavedAt: document.lastSavedAt,
     fileSize: document.fileSize,
-    cursorPosition: { line: 1, column: 1 },
-    scrollPosition: { line: 1, ratio: 0, totalLines: 1, scrollTop: 0, scrollHeight: 0, clientHeight: 0 },
-    editorState: null,
+    cursorPosition: unchanged ? tab.cursorPosition : { line: 1, column: 1 },
+    scrollPosition: unchanged ? tab.scrollPosition : { line: 1, ratio: 0, totalLines: 1, scrollTop: 0, scrollHeight: 0, clientHeight: 0 },
+    editorState: unchanged ? tab.editorState : null,
     html: EMPTY_SANITIZED_MARKDOWN_HTML,
     sourceBlocks: [],
     virtualPreview: null,
     diagrams: [],
     diagramDiagnostics: [],
+    markdownDiagnostics: [],
     renderedRevision: -1,
     analysisRevision: -1,
     outline: [],
@@ -391,6 +411,38 @@ export function createDocumentStore() {
         return additions.length ? { ...state, tabs: [...state.tabs, ...additions] } : state;
       });
     },
+    restoreResourceSessionTabs(resources: ResourceRef[], activeResource: ResourceRef | null) {
+      store.update((state) => {
+        const restored: EditorTab[] = [];
+        for (const resource of resources) {
+          if ((resource.kind !== 'desktopFile' && resource.kind !== 'androidDocument') ||
+            restored.some(tab => isSameResource(tab.resource, resource))) continue;
+          restored.push(createDeferredResourceTab(resource));
+          if (restored.length === 50) break;
+        }
+        if (!restored.length) return state;
+        if (state.tabs.length === 1 && canReplacePlaceholder(state.tabs[0])) {
+          const active = restored.find(tab => isSameResource(tab.resource, activeResource));
+          return { tabs: restored, activeTabId: active?.id ?? restored[0].id };
+        }
+        const additions = restored.filter(tab => !state.tabs.some(existing =>
+          isSameResource(existing.resource, tab.resource)));
+        return additions.length ? { ...state, tabs: [...state.tabs, ...additions] } : state;
+      });
+    },
+    setDeferredResourceTitle(tabId: string, resource: ResourceRef, title: string): boolean {
+      let applied = false;
+      store.update((state) => {
+        const tabs = state.tabs.map((tab) => {
+          if (tab.id !== tabId || tab.loadState === 'loaded' ||
+            !isSameResource(tab.resource, resource)) return tab;
+          applied = true;
+          return { ...tab, title };
+        });
+        return applied ? { ...state, tabs } : state;
+      });
+      return applied;
+    },
     setActive(id: string) {
       store.update((state) =>
         state.tabs.some((tab) => tab.id === id) ? { ...state, activeTabId: id } : state
@@ -420,14 +472,15 @@ export function createDocumentStore() {
       }));
       return applied;
     },
-    hydrateDocument(tabId: string, requestedPath: string, document: DocumentDto): boolean {
+    hydrateDocument(tabId: string, requestedTarget: string | ResourceRef, document: DocumentDto): boolean {
+      const requestedResource = typeof requestedTarget === 'string' ? desktopFile(requestedTarget) : requestedTarget;
       let applied = false;
       store.update((state) => {
         const target = state.tabs.find((tab) => tab.id === tabId);
         if (
           !target ||
           target.loadState === 'loaded' ||
-          !isSameFilePath(target.path, requestedPath)
+          !isSameResource(target.resource, requestedResource)
         ) {
           return state;
         }
@@ -453,11 +506,12 @@ export function createDocumentStore() {
       });
       return applied;
     },
-    reloadDocument(tabId: string, requestedPath: string, document: DocumentDto): boolean {
+    reloadDocument(tabId: string, requestedTarget: string | ResourceRef, document: DocumentDto): boolean {
+      const requestedResource = typeof requestedTarget === 'string' ? desktopFile(requestedTarget) : requestedTarget;
       let applied = false;
       store.update((state) => {
         const target = state.tabs.find((tab) => tab.id === tabId);
-        if (!target || !isSameFilePath(target.path, requestedPath)) return state;
+        if (!target || !isSameResource(target.resource, requestedResource)) return state;
         const existingOwner = state.tabs.find(
           (tab) => tab.id !== tabId && isSameFileIdentity(tab.fileIdentity, document.fileIdentity)
         );
@@ -521,11 +575,38 @@ export function createDocumentStore() {
         tabs: state.tabs.map((tab) => (tab.id === tabId ? { ...tab, scrollPosition } : tab))
       }));
     },
-    updateEditorState(tabId: string, editorState: SerializedEditorState) {
+    updateEditorState(tabId: string, editorState: EditorSnapshot) {
       store.update((state) => ({
         ...state,
-        tabs: state.tabs.map((tab) => (tab.id === tabId ? { ...tab, editorState } : tab))
+        tabs: state.tabs.map((tab) => (tab.id === tabId && tab.loadState === 'loaded' ? { ...tab, editorState } : tab))
       }));
+    },
+    evictClean(tabId: string): { previewSession: string | null } | null {
+      let released: { previewSession: string | null } | null = null;
+      store.update((state) => ({
+        ...state,
+        tabs: state.tabs.map((tab) => {
+          if (tab.id !== tabId || tab.id === state.activeTabId || tab.isDirty || !tab.resource || tab.loadState !== 'loaded') return tab;
+          released = { previewSession: tab.virtualPreview?.sessionId ?? null };
+          return {
+            ...tab,
+            content: '',
+            contentRevision: tab.contentRevision + 1,
+            loadState: 'unloaded',
+            editorState: tab.editorState ? { selection: tab.editorState.selection } : null,
+            html: EMPTY_SANITIZED_MARKDOWN_HTML,
+            sourceBlocks: [],
+            virtualPreview: null,
+            diagrams: [],
+            diagramDiagnostics: [],
+            markdownDiagnostics: [],
+            outline: [],
+            renderedRevision: -1,
+            analysisRevision: -1
+          };
+        })
+      }));
+      return released;
     },
     updateRendered(tabId: string, contentRevision: number, rendered: RenderedMarkdownDto): boolean {
       let applied = false;
@@ -541,6 +622,7 @@ export function createDocumentStore() {
             virtualPreview: rendered.virtualPreview ?? null,
             diagrams: rendered.diagrams,
             diagramDiagnostics: rendered.diagramDiagnostics,
+            markdownDiagnostics: rendered.markdownDiagnostics ?? [],
             renderedRevision: contentRevision,
             analysisRevision: contentRevision,
             outline: rendered.outline,
@@ -560,6 +642,7 @@ export function createDocumentStore() {
           return {
             ...tab,
             analysisRevision: contentRevision,
+            markdownDiagnostics: analysis.markdownDiagnostics ?? [],
             outline: analysis.outline,
             stats: analysis.stats
           };
@@ -584,6 +667,7 @@ export function createDocumentStore() {
             return {
               ...tab,
               path: document.path,
+              resource: documentResource({ path: document.path ?? null, resource: document.resource }),
               fileIdentity: document.fileIdentity,
               contentVersion: document.contentVersion,
               title: document.title,
@@ -659,17 +743,20 @@ export function createDocumentProjections(store: Readable<DocumentState>) {
   const activePreview = projectActive(store, findActive, ({
     id,
     path,
+    resource,
     title,
     html,
     sourceBlocks,
     virtualPreview,
     diagrams,
     diagramDiagnostics,
+    markdownDiagnostics,
+    analysisRevision,
     renderedRevision,
     contentRevision,
     outline,
     loadState
-  }): ActivePreviewDocument => ({ id, path, title, html, sourceBlocks, virtualPreview, diagrams, diagramDiagnostics, renderedRevision, contentRevision, outline, loadState }));
+  }): ActivePreviewDocument => ({ id, path, resource, title, html, sourceBlocks, virtualPreview, diagrams, diagramDiagnostics, markdownDiagnostics, analysisRevision, renderedRevision, contentRevision, outline, loadState }));
   const activeSidebar = projectActive(store, findActive, ({
     id,
     path,
@@ -692,12 +779,13 @@ export function createDocumentProjections(store: Readable<DocumentState>) {
     stats
   }));
   const activeStatus = projectActive(store, findActive, ({
+    title,
     path,
     isDirty,
     loadState,
     stats,
     cursorPosition
-  }): StatusDocumentView => ({ path, isDirty, loadState, stats, cursorPosition }));
+  }): StatusDocumentView => ({ title, path, isDirty, loadState, stats, cursorPosition }));
   const tabBarState = distinctProjection(
     store,
     (state) => ({
@@ -737,6 +825,21 @@ export function createDocumentProjections(store: Readable<DocumentState>) {
       left.paths.length === right.paths.length &&
       left.paths.every((path, index) => path === right.paths[index])
   );
+  const resourceSessionProjection = distinctProjection(
+    store,
+    (state): ResourceSessionProjection => {
+      const resources = state.tabs.flatMap(tab => tab.resource &&
+        (tab.resource.kind === 'desktopFile' || tab.resource.kind === 'androidDocument') ? [tab.resource] : []);
+      const activeResource = state.tabs.find(tab => tab.id === state.activeTabId)?.resource ?? null;
+      return { resources, activeResource: resources.some(resource => isSameResource(resource, activeResource))
+        ? activeResource : null };
+    },
+    (left, right) =>
+      (isSameResource(left.activeResource, right.activeResource) ||
+        (left.activeResource === null && right.activeResource === null)) &&
+      left.resources.length === right.resources.length &&
+      left.resources.every((resource, index) => isSameResource(resource, right.resources[index]))
+  );
   return {
     activeTab,
     activeShell,
@@ -746,7 +849,8 @@ export function createDocumentProjections(store: Readable<DocumentState>) {
     activeSidebar,
     activeStatus,
     tabBarState,
-    sessionProjection
+    sessionProjection,
+    resourceSessionProjection
   };
 }
 
@@ -774,7 +878,8 @@ export const {
   activeSidebar,
   activeStatus,
   tabBarState,
-  sessionProjection
+  sessionProjection,
+  resourceSessionProjection
 } = createDocumentProjections(documentStore);
 
 export function getActiveTab(): EditorTab {

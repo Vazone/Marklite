@@ -12,6 +12,7 @@ let scrollIntoView: ReturnType<typeof vi.fn>;
 function tab(id: string, title: string, isDirty = false): EditorTab {
   return {
     id,
+    resource: { kind: "desktopFile", path: `C:\\docs\\${title}` },
     path: `C:\\docs\\${title}`,
     fileIdentity: `test-file:${title}`,
     contentVersion: `sha256:${title}`,

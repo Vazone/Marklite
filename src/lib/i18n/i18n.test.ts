@@ -2,6 +2,7 @@ import { get } from 'svelte/store';
 import { describe, expect, it } from 'vitest';
 import {
   currentLanguage,
+  localizeError,
   languageRegistry,
   setLanguage,
   supportedLanguages,
@@ -11,6 +12,14 @@ import {
 } from '.';
 
 describe('i18n registry', () => {
+  it('explains unavailable platform capabilities in both languages', () => {
+    const error = { code: 'CAPABILITY_UNAVAILABLE', message: 'native detail' };
+    setLanguage('en');
+    expect(localizeError(error)).toBe('This feature is not yet available on this platform.');
+    setLanguage('zh-CN');
+    expect(localizeError(error)).toBe('当前平台暂不支持此功能。');
+    setLanguage('en');
+  });
   it('keeps every registered catalog aligned with the English key set', () => {
     const expected = Object.keys(languageRegistry.en.messages).sort();
     for (const language of supportedLanguages) {

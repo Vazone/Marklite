@@ -108,3 +108,21 @@ describe('markdown render coordinator', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 });
+
+
+test('immediate startup render consumes its matching debounce without dropping newer edits', async () => {
+  vi.useFakeTimers();
+  const render = vi.fn(async (_content: string) => rendered);
+  const coordinator = createMarkdownRenderCoordinator({ render, analyze: async () => analysis,
+    onRendered: () => true, onAnalyzed: () => true, onError: vi.fn() });
+  const first = { kind: 'render' as const, tabId: 'a', content: 'first', contentRevision: 1 };
+  coordinator.update(first, 'render', false, 200);
+  await coordinator.runNow(first);
+  await vi.advanceTimersByTimeAsync(300);
+  expect(render).toHaveBeenCalledTimes(1);
+  coordinator.update({ ...first, content: 'new', contentRevision: 2 }, 'render', false, 200);
+  await coordinator.runNow(first);
+  await vi.advanceTimersByTimeAsync(300);
+  expect(render.mock.calls.map(call => call[0])).toEqual(['first', 'first', 'new']);
+  coordinator.dispose();
+});

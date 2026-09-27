@@ -17,7 +17,7 @@ export type ExitProtectionCallbacks = {
   getDirtyDocuments: () => DirtyExitDocument[];
   onPromptChange: (state: ExitPromptState | null) => void;
   saveDocument: (document: DirtyExitDocument) => Promise<boolean>;
-  closeWindow: () => Promise<void>;
+  closeWindow: (discard?: boolean) => Promise<void>;
   onSaveIncomplete?: (document: DirtyExitDocument, error?: unknown) => void;
   onCloseError?: (error: unknown) => void;
 };
@@ -54,11 +54,11 @@ export function createExitProtectionController(callbacks: ExitProtectionCallback
     callbacks.onPromptChange(null);
   }
 
-  async function closeAfterDecision(busyLabel: string): Promise<boolean> {
+  async function closeAfterDecision(busyLabel: string, discard = false): Promise<boolean> {
     phase = 'closing';
     publishPrompt(true, busyLabel);
     try {
-      await callbacks.closeWindow();
+      await callbacks.closeWindow(discard);
       phase = 'idle';
       promptDocuments = [];
       callbacks.onPromptChange(null);
@@ -111,7 +111,7 @@ export function createExitProtectionController(callbacks: ExitProtectionCallback
 
     async discardAndExit(): Promise<boolean> {
       if (phase !== 'prompt') return false;
-      return closeAfterDecision(t('exit.exiting'));
+      return closeAfterDecision(t('exit.exiting'), true);
     },
 
     async saveAndExit(): Promise<boolean> {

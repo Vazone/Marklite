@@ -81,6 +81,43 @@ impl<'a> ExportResourceResolver<'a> {
         }
     }
 
+    #[cfg(target_os = "android")]
+    pub(crate) fn install_android_images(&mut self, batch: image_load_service::PreviewImageBatch) {
+        let mut keys = Vec::with_capacity(batch.resources.len());
+        for resource in batch.resources {
+            let image = resource.image;
+            let key = format!("android:{}", image.path);
+            self.images_by_canonical_path.insert(
+                key.clone(),
+                CachedImage {
+                    bytes: image.bytes,
+                    mime: image.mime,
+                    canonical_path: key.clone(),
+                    data_url: None,
+                },
+            );
+            keys.push(key);
+        }
+        for entry in batch.entries {
+            if let Some(index) = entry.resource_index {
+                if let Some(key) = keys.get(index) {
+                    self.outcomes_by_target
+                        .insert(entry.target, ResourceOutcome::Ready(key.clone()));
+                    continue;
+                }
+            }
+            if let Some(error) = entry.error {
+                self.warnings.push(ExportWarning::new(
+                    error.code,
+                    error.message,
+                    Some(entry.target.clone()),
+                ));
+            }
+            self.outcomes_by_target
+                .insert(entry.target, ResourceOutcome::Unavailable);
+        }
+    }
+
     pub(crate) fn html_data_url(&mut self, target: &str) -> Option<Arc<str>> {
         let key = self.resolve_image(target)?;
         let image = self.images_by_canonical_path.get_mut(&key)?;
@@ -268,8 +305,13 @@ pub(crate) fn resolve_export_link(
         Ok(MarkdownTargetDto::Anchor { fragment }) => Ok(ExportLink::Anchor(fragment)),
         Ok(MarkdownTargetDto::External { url }) => Ok(ExportLink::External(url)),
         Ok(MarkdownTargetDto::Email { address }) => Ok(ExportLink::Email(address)),
-        Ok(MarkdownTargetDto::LocalDocument { path, fragment }) => {
-            let mut url = Url::from_file_path(&path).map_err(|_| {
+        Ok(MarkdownTargetDto::LocalDocument {
+            resource, fragment, ..
+        }) => {
+            let path = crate::platform::desktop::resources::path(&resource).map_err(|error| {
+                ExportWarning::new(error.code, error.message, Some(target.to_string()))
+            })?;
+            let mut url = Url::from_file_path(path).map_err(|_| {
                 ExportWarning::new(
                     "INVALID_MARKDOWN_TARGET",
                     "本地链接无法转换为 file URL，已保留显示文本",

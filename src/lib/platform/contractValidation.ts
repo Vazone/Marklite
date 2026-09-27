@@ -1,3 +1,4 @@
+import { parseResourceRef, documentResource } from './resources';
 import type {
   AppError,
   AppSettings,
@@ -20,9 +21,11 @@ import type {
   DiagramRuntimeStatus,
   RenderedDiagram,
   MarkdownAnalysisDto,
+  MarkdownDiagnostic,
   SanitizedMarkdownHtml,
   SourceBlock,
   SessionStateDto,
+  ResourceSessionDto,
   StartupDiagnosticsExportDto,
   StartupReadyDto,
   ThemeMode,
@@ -87,6 +90,7 @@ export function parseRenderedMarkdownDto(value: unknown): RenderedMarkdownDto {
 
   return {
     html: value.html as SanitizedMarkdownHtml,
+    markdownDiagnostics: parseMarkdownDiagnostics(value.markdownDiagnostics),
     outline: value.outline.map((item, index) => parseOutlineItem(item, `render_markdown.outline[${index}]`)),
     stats: parseDocumentStats(value.stats, 'render_markdown.stats'),
     sourceBlocks,
@@ -107,6 +111,7 @@ function parseVirtualPreviewIndex(value: unknown): VirtualPreviewIndex {
   const sessionId = parseString(value.sessionId, 'render_markdown.virtualPreview.sessionId');
   if (!sessionId) throw contractError('render_markdown.virtualPreview.sessionId');
   let previousEnd = 0;
+  let previousRange: number[] | undefined;
   const segments = value.segments.map((segment, index) => {
     const field = `render_markdown.virtualPreview.segments[${index}]`;
     if (!isRecord(segment)) throw contractError(field);
@@ -116,10 +121,16 @@ function parseVirtualPreviewIndex(value: unknown): VirtualPreviewIndex {
     const endLine = parseNonNegativeInteger(segment.endLine, `${field}.endLine`);
     const estimatedHeight = parseNonNegativeInteger(segment.estimatedHeight, `${field}.estimatedHeight`);
     const estimatedNodes = parseNonNegativeInteger(segment.estimatedNodes, `${field}.estimatedNodes`);
+    const sourceContinuation = segment.sourceContinuation === undefined
+      ? undefined : parseBoolean(segment.sourceContinuation, `${field}.sourceContinuation`);
+    const range = [startUtf16, endUtf16, startLine, endLine];
+    const sameSource = previousRange?.every((value, index) => value === range[index]) ?? false;
     if (endUtf16 < startUtf16 || endLine < startLine || startLine < 1 || estimatedHeight < 1 ||
-      (index > 0 && startUtf16 < previousEnd)) throw contractError(field);
+      (sourceContinuation && !sameSource) ||
+      (index > 0 && startUtf16 < previousEnd && !sourceContinuation)) throw contractError(field);
     previousEnd = endUtf16;
-    return { startUtf16, endUtf16, startLine, endLine, estimatedHeight, estimatedNodes };
+    previousRange = range;
+    return { startUtf16, endUtf16, startLine, endLine, estimatedHeight, estimatedNodes, sourceContinuation };
   });
   return { sessionId, segments };
 }
@@ -246,12 +257,28 @@ function parseSourceBlock(value: unknown, field: string): SourceBlock {
   return { startUtf16, endUtf16, startLine, endLine };
 }
 
+function parseMarkdownDiagnostics(value: unknown): MarkdownDiagnostic[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw contractError('markdownDiagnostics');
+  return value.map((item, index) => {
+    const field = `markdownDiagnostics[${index}]`;
+    if (!isRecord(item)) throw contractError(field);
+    return {
+      code: parseString(item.code, `${field}.code`),
+      message: parseString(item.message, `${field}.message`),
+      line: parsePositiveInteger(item.line, `${field}.line`),
+      column: parsePositiveInteger(item.column, `${field}.column`)
+    };
+  });
+}
+
 export function parseMarkdownAnalysisDto(value: unknown): MarkdownAnalysisDto {
   if (!isRecord(value)) throw contractError('analyze_markdown');
   if (!Array.isArray(value.outline)) throw contractError('analyze_markdown.outline');
   return {
     outline: value.outline.map((item: unknown, index: number) => parseOutlineItem(item, `analyze_markdown.outline[${index}]`)),
-    stats: parseDocumentStats(value.stats, 'analyze_markdown.stats')
+    stats: parseDocumentStats(value.stats, 'analyze_markdown.stats'),
+    markdownDiagnostics: parseMarkdownDiagnostics(value.markdownDiagnostics)
   };
 }
 
@@ -436,7 +463,8 @@ export function parseAppSettings(value: unknown): AppSettings {
     recentFilesLimit: parseFiniteNumber(value.recentFilesLimit, 'settings.recentFilesLimit'),
     markdownToolbarEnabled: parseBoolean(value.markdownToolbarEnabled, 'settings.markdownToolbarEnabled'),
     allowLocalImages: parseBoolean(value.allowLocalImages, 'settings.allowLocalImages'),
-    confirmExternalLinks: parseBoolean(value.confirmExternalLinks, 'settings.confirmExternalLinks')
+    confirmExternalLinks: parseBoolean(value.confirmExternalLinks, 'settings.confirmExternalLinks'),
+    checkUpdatesAutomatically: parseBoolean(value.checkUpdatesAutomatically, 'settings.checkUpdatesAutomatically')
   };
 }
 
@@ -461,15 +489,36 @@ export function parseSessionState(value: unknown): SessionStateDto {
   };
 }
 
+export function parseResourceSession(value: unknown): ResourceSessionDto {
+  if (!isRecord(value) || value.version !== 2 || !Array.isArray(value.resources)
+    || value.resources.length > 50) throw contractError('resource_session');
+  const resources = value.resources.map(parseResourceRef);
+  if (resources.some(resource => resource.kind !== 'desktopFile' && resource.kind !== 'androidDocument')) {
+    throw contractError('resource_session.resources');
+  }
+  const activeResource = value.activeResource === null ? null : parseResourceRef(value.activeResource);
+  if (activeResource && !resources.some(resource =>
+    resource.kind === activeResource.kind &&
+    (resource.kind === 'desktopFile' && activeResource.kind === 'desktopFile'
+      ? resource.path === activeResource.path
+      : resource.kind === 'androidDocument' && activeResource.kind === 'androidDocument' && resource.uri === activeResource.uri)
+  )) throw contractError('resource_session.activeResource');
+  return { version: 2, resources, activeResource };
+}
+
 export function parseMarkdownTarget(value: unknown): MarkdownTargetDto {
   if (!isRecord(value)) throw contractError('markdown_target');
   if (value.kind === 'anchor') {
     return { kind: 'anchor', fragment: parseString(value.fragment, 'markdown_target.fragment') };
   }
   if (value.kind === 'localDocument') {
+    const path = parseOptionalString(value.path, 'markdown_target.path');
+    const resource = value.resource === undefined ? undefined : parseResourceRef(value.resource);
+    if (!documentResource({ path, resource })) throw contractError('markdown_target.resource');
     return {
       kind: 'localDocument',
-      path: parseString(value.path, 'markdown_target.path'),
+      path,
+      ...(resource === undefined ? {} : { resource }),
       fragment: parseOptionalString(value.fragment, 'markdown_target.fragment')
     };
   }
@@ -514,8 +563,12 @@ export function parseStartupDiagnosticsExport(value: unknown): StartupDiagnostic
 
 function parseDocumentDto(value: unknown): DocumentDto {
   if (!isRecord(value)) throw contractError('document_operation.document');
+  const path = parseOptionalString(value.path, 'document.path');
+  const resource = value.resource === undefined ? undefined : value.resource === null ? null : parseResourceRef(value.resource);
+  documentResource({ path, resource });
   return {
-    path: parseOptionalString(value.path, 'document.path'),
+    path,
+    ...(resource === undefined ? {} : { resource }),
     fileIdentity: parseOptionalString(value.fileIdentity, 'document.fileIdentity'),
     contentVersion: parseOptionalString(value.contentVersion, 'document.contentVersion'),
     title: parseString(value.title, 'document.title'),

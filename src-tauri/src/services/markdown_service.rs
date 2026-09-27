@@ -1,7 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use crate::models::markdown_event::{self as html, Event};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+};
 
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
-use pulldown_cmark::{html, CowStr, Event, HeadingLevel, LinkType, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CowStr, HeadingLevel, LinkType, Options, Parser, Tag, TagEnd};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -9,16 +13,25 @@ use crate::{
         app_error::AppError,
         diagram::DiagramSource,
         markdown::{
-            DocumentStats, MarkdownAnalysisDto, OutlineItem, RenderedMarkdownDto, SourceBlock,
+            DocumentStats, DocumentToc, MarkdownAnalysisDto, OutlineItem, RenderedMarkdownDto,
+            SourceBlock,
         },
     },
     services::{diagram_service, math_service},
     utils::security::sanitize_html,
 };
 
+#[path = "markdown_service/front_matter.rs"]
+mod front_matter;
+#[path = "markdown_service/inline.rs"]
+mod inline;
+#[path = "markdown_service/marks.rs"]
+mod marks;
 #[path = "markdown_service/preview.rs"]
 mod preview;
-pub use preview::{prepare_virtual_preview, PreviewState};
+#[cfg(test)]
+pub use preview::prepare_virtual_preview;
+pub use preview::{prepare_preview, PreviewState};
 
 #[cfg(test)]
 fn render_markdown_to_html(markdown: &str) -> Result<String, AppError> {
@@ -42,6 +55,13 @@ fn render_markdown_html_from(
 ) -> Result<String, AppError> {
     let parser = apply_heading_ids(events, outline)
         .into_iter()
+        .flat_map(|event| {
+            let (direct, expanded) = match event {
+                Event::Toc(toc) => (None, toc.events().collect::<Vec<_>>()),
+                event => (Some(event), Vec::new()),
+            };
+            direct.into_iter().chain(expanded)
+        })
         .map(move |event| {
             if encode_targets {
                 encode_navigation_target(event)
@@ -138,17 +158,70 @@ std::thread_local! {
     static SOURCE_PARSE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn source_parser(markdown: &str, profile: SyntaxProfile) -> Parser<'_> {
+fn source_events(
+    markdown: &str,
+    profile: SyntaxProfile,
+) -> impl Iterator<Item = (Event<'_>, std::ops::Range<usize>)> {
+    let offset = if profile == SyntaxProfile::GfmWithMarkLiteExtensions {
+        front_matter::inspect(markdown)
+            .filter(|metadata| metadata.diagnostic.is_none())
+            .map_or(0, |metadata| metadata.range.end)
+    } else {
+        0
+    };
+    source_events_at(markdown, profile, offset)
+}
+
+fn source_events_at(
+    markdown: &str,
+    profile: SyntaxProfile,
+    offset: usize,
+) -> impl Iterator<Item = (Event<'_>, std::ops::Range<usize>)> {
     #[cfg(test)]
     SOURCE_PARSE_COUNT.with(|count| count.set(count.get() + 1));
-    Parser::new_ext(markdown, markdown_options(profile))
+    inline::emoji_events(
+        markdown,
+        marks::events(
+            markdown,
+            Parser::new_ext(&markdown[offset..], markdown_options(profile))
+                .into_offset_iter()
+                .map(move |(event, range)| {
+                    (event.into(), range.start + offset..range.end + offset)
+                }),
+            profile == SyntaxProfile::GfmWithMarkLiteExtensions,
+        ),
+        profile == SyntaxProfile::GfmWithMarkLiteExtensions,
+    )
+}
+
+fn parser_source(markdown: &str) -> Cow<'_, str> {
+    let bytes = markdown.as_bytes();
+    if !bytes
+        .iter()
+        .enumerate()
+        .any(|(index, byte)| *byte == b'\r' && bytes.get(index + 1) != Some(&b'\n'))
+    {
+        return Cow::Borrowed(markdown);
+    }
+    // Replace lone CR only: equal byte/UTF-16 width preserves all original source offsets.
+    let mut normalized = bytes.to_vec();
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b'\r' && bytes.get(index + 1) != Some(&b'\n') {
+            normalized[index] = b'\n';
+        }
+    }
+    Cow::Owned(String::from_utf8(normalized).expect("ASCII newline replacement preserves UTF-8"))
 }
 
 // The standalone conformance probe includes this module outside the application crate.
 #[allow(dead_code)]
 pub(crate) fn profile_events(markdown: &str, profile: SyntaxProfile) -> Vec<Event<'static>> {
+    if profile == DEFAULT_SYNTAX_PROFILE {
+        return normalized_document(markdown).events;
+    }
+    let source = parser_source(markdown);
     normalize_profile_events(
-        source_parser(markdown, profile).map(Event::into_static),
+        source_events(&source, profile).map(|(event, _)| event.into_static()),
         profile,
     )
 }
@@ -248,7 +321,12 @@ fn event_text_for_math_fence(event: &Event<'_>) -> String {
         Event::FootnoteReference(value) => format!("[^{value}]"),
         Event::TaskListMarker(done) => format!("[{}]", if *done { 'x' } else { ' ' }),
         Event::SoftBreak | Event::HardBreak => "\n".to_string(),
-        Event::Rule | Event::Start(_) | Event::End(_) => String::new(),
+        Event::Rule
+        | Event::Start(_)
+        | Event::End(_)
+        | Event::StartHighlight
+        | Event::EndHighlight
+        | Event::Toc(_) => String::new(),
     }
 }
 
@@ -297,11 +375,19 @@ fn filter_disallowed_raw_html(value: &str) -> String {
     output
 }
 
-pub(crate) fn normalized_markdown_with_diagrams(
-    markdown: &str,
-) -> (Vec<Event<'static>>, Vec<DiagramSource>) {
-    let (analysis, events, _, diagrams) = analyze_with_events(markdown, false);
-    (apply_heading_ids(events, &analysis.outline), diagrams)
+pub(crate) struct NormalizedMarkdown {
+    pub diagnostics: Vec<crate::models::markdown::MarkdownDiagnostic>,
+    pub events: Vec<Event<'static>>,
+    pub event_blocks: Vec<Option<usize>>,
+    pub source_blocks: Vec<SourceBlock>,
+    pub diagrams: Vec<DiagramSource>,
+}
+
+pub(crate) fn normalized_document(markdown: &str) -> NormalizedMarkdown {
+    let (analysis, mut document) = analyze_source(markdown, false, true);
+    document.events = apply_heading_ids(document.events, &analysis.outline);
+    document.diagnostics = analysis.markdown_diagnostics;
+    document
 }
 
 fn apply_heading_ids(events: Vec<Event<'static>>, outline: &[OutlineItem]) -> Vec<Event<'static>> {
@@ -406,11 +492,19 @@ fn split_gfm_autolinks(text: &str, output: &mut Vec<Event<'static>>) {
     }
 }
 
+// The standalone conformance probe exercises the full preview serializer.
+#[allow(dead_code)]
 pub fn render_markdown(markdown: &str) -> Result<RenderedMarkdownDto, AppError> {
-    let (analysis, events, source_blocks, diagrams) = analyze_with_events(markdown, true);
+    render_analyzed(analyze_with_events(markdown, true))
+}
+
+fn render_analyzed(
+    (analysis, events, source_blocks, diagrams): AnalyzedMarkdown,
+) -> Result<RenderedMarkdownDto, AppError> {
     let diagram_diagnostics = diagram_service::validate_sources(&diagrams);
     let html = render_markdown_html(events, true, &analysis.outline)?;
     Ok(RenderedMarkdownDto {
+        markdown_diagnostics: analysis.markdown_diagnostics,
         html,
         outline: analysis.outline,
         stats: analysis.stats,
@@ -442,15 +536,28 @@ pub fn analyze_markdown(markdown: &str) -> MarkdownAnalysisDto {
     analyze_with_events(markdown, false).0
 }
 
-fn analyze_with_events(
-    markdown: &str,
-    mark_blocks: bool,
-) -> (
+type AnalyzedMarkdown = (
     MarkdownAnalysisDto,
     Vec<Event<'static>>,
     Vec<SourceBlock>,
     Vec<DiagramSource>,
-) {
+);
+
+fn analyze_with_events(markdown: &str, mark_blocks: bool) -> AnalyzedMarkdown {
+    let (analysis, document) = analyze_source(markdown, mark_blocks, false);
+    (
+        analysis,
+        document.events,
+        document.source_blocks,
+        document.diagrams,
+    )
+}
+
+fn analyze_source(
+    markdown: &str,
+    mark_blocks: bool,
+    track_origins: bool,
+) -> (MarkdownAnalysisDto, NormalizedMarkdown) {
     let mut outline = Vec::new();
     let mut current_heading: Option<PendingHeading> = None;
     let mut used_heading_ids = HashSet::new();
@@ -459,13 +566,24 @@ fn analyze_with_events(
     let mut image_count = 0;
     let mut line_cursor = LineCursor::new(markdown);
     let mut raw_events = Vec::new();
+    let mut block_event_ends = Vec::new();
     let mut block_ranges = Vec::new();
     let mut block_start = None;
     let mut depth = 0usize;
     let mut pending_diagram: Option<PendingDiagram> = None;
     let mut diagrams = Vec::new();
 
-    for (event, range) in source_parser(markdown, DEFAULT_SYNTAX_PROFILE).into_offset_iter() {
+    let source = parser_source(markdown);
+    let metadata = front_matter::inspect(&source);
+    let offset = metadata
+        .as_ref()
+        .filter(|metadata| metadata.diagnostic.is_none())
+        .map_or(0, |metadata| metadata.range.end);
+    let markdown_diagnostics = metadata
+        .and_then(|metadata| metadata.diagnostic)
+        .into_iter()
+        .collect();
+    for (event, range) in source_events_at(&source, DEFAULT_SYNTAX_PROFILE, offset) {
         match &event {
             Event::Start(Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Fenced(info)))
                 if info.trim().eq_ignore_ascii_case("mermaid") =>
@@ -535,6 +653,9 @@ fn analyze_with_events(
             _ => {}
         }
         raw_events.push(event.clone().into_static());
+        if block_event_ends.len() < block_ranges.len() {
+            block_event_ends.push(raw_events.len());
+        }
         match event {
             Event::Start(Tag::Heading { level, id, .. }) => {
                 current_heading = Some(PendingHeading {
@@ -589,7 +710,48 @@ fn analyze_with_events(
         }
     }
 
-    let events = normalize_profile_events(raw_events.into_iter(), DEFAULT_SYNTAX_PROFILE);
+    // Normalize complete source blocks so synthetic autolink/math events inherit
+    // an explicit origin, rather than guessing offsets from their rendered text.
+    let mut raw = raw_events.into_iter();
+    let mut events = Vec::new();
+    let mut event_blocks = Vec::new();
+    let mut previous_end = 0;
+    let mut shared_toc = None;
+    for (block, end) in block_event_ends.into_iter().enumerate() {
+        let block_events: Vec<_> = raw.by_ref().take(end - previous_end).collect();
+        let (start_byte, end_byte) = block_ranges[block];
+        let body = if mark_blocks {
+            &block_events[1..]
+        } else {
+            &block_events[..]
+        };
+        let is_toc = markdown[start_byte..end_byte].trim() == "[TOC]"
+            && matches!(body, [Event::Start(Tag::Paragraph), middle @ .., Event::End(TagEnd::Paragraph)]
+                if middle.iter().all(|event| matches!(event, Event::Text(_))));
+        let normalized = if is_toc {
+            let toc = shared_toc
+                .get_or_insert_with(|| DocumentToc::new(outline.clone()))
+                .clone();
+            let mut replacement = Vec::with_capacity(2);
+            if mark_blocks {
+                replacement.push(block_events[0].clone());
+            }
+            replacement.push(Event::Toc(toc));
+            replacement
+        } else {
+            normalize_profile_events(block_events.into_iter(), DEFAULT_SYNTAX_PROFILE)
+        };
+        if track_origins {
+            event_blocks.extend(std::iter::repeat_n(Some(block), normalized.len()));
+        }
+        events.extend(normalized);
+        previous_end = end;
+    }
+    let remaining = normalize_profile_events(raw, DEFAULT_SYNTAX_PROFILE);
+    if track_origins {
+        event_blocks.extend(std::iter::repeat_n(None, remaining.len()));
+    }
+    events.extend(remaining);
     for event in &events {
         match event {
             Event::Start(Tag::Link { .. }) => link_count += 1,
@@ -599,10 +761,11 @@ fn analyze_with_events(
     }
 
     let analysis = MarkdownAnalysisDto {
+        markdown_diagnostics,
         stats: DocumentStats {
             word_count: markdown.split_whitespace().count(),
             character_count: markdown.chars().count(),
-            line_count: markdown.bytes().filter(|byte| *byte == b'\n').count() + 1,
+            line_count: LineCursor::new(markdown).line_at(markdown.len()),
             heading_count: outline.len(),
             link_count,
             image_count,
@@ -620,7 +783,16 @@ fn analyze_with_events(
             end_line: line_cursor.line_at(end),
         })
         .collect();
-    (analysis, events, source_blocks, diagrams)
+    (
+        analysis,
+        NormalizedMarkdown {
+            diagnostics: Vec::new(),
+            events,
+            event_blocks,
+            source_blocks,
+            diagrams,
+        },
+    )
 }
 
 struct PendingDiagram {
@@ -705,8 +877,10 @@ impl<'a> LineCursor<'a> {
             byte_offset >= self.offset,
             "parser offsets must be monotonic"
         );
-        for byte in &self.bytes[self.offset..byte_offset] {
-            if *byte == b'\n' {
+        for index in self.offset..byte_offset {
+            if self.bytes[index] == b'\n'
+                || (self.bytes[index] == b'\r' && self.bytes.get(index + 1) != Some(&b'\n'))
+            {
                 self.line += 1;
             }
         }
@@ -763,6 +937,7 @@ mod tests {
         extract_outline, profile_events, render_markdown, render_markdown_to_html, LineCursor,
         SyntaxProfile, DEFAULT_SYNTAX_PROFILE,
     };
+    use crate::models::markdown_event::{self as html, Event};
     use crate::services::math_service;
 
     #[test]
@@ -782,9 +957,9 @@ mod tests {
             assert_eq!(count.get(), 1);
 
             count.set(0);
-            let (events, diagrams) = super::normalized_markdown_with_diagrams(source);
-            assert!(!events.is_empty());
-            assert!(diagrams.is_empty());
+            let semantic = crate::services::export_semantic::SemanticDocument::parse(source, None);
+            assert!(!semantic.roots().is_empty());
+            assert!(semantic.diagram_sources().is_empty());
             assert_eq!(count.get(), 1);
         });
     }
@@ -824,7 +999,7 @@ mod tests {
     fn measure_live_split_markdown_stages() {
         use std::{fs, path::Path, time::Instant};
 
-        use pulldown_cmark::html;
+        use crate::models::markdown_event as html;
         use serde_json::json;
 
         let samples = std::env::var("MARKLITE_BENCHMARK_SAMPLES")
@@ -900,6 +1075,8 @@ mod tests {
             render_markdown_to_html("- [x] Done\n\n| A | B |\n| - | - |\n| 1 | 2 |").unwrap();
         assert!(html.contains("<table>"));
         assert!(html.contains("checkbox"));
+        let blank_template = render_markdown_to_html("|  |  |\n| --- | --- |\n|  |  |").unwrap();
+        assert!(blank_template.contains("<table>"));
     }
 
     #[test]
@@ -939,16 +1116,10 @@ mod tests {
         assert_eq!(ordinary.formula_count, 0);
         assert!(profile_events("$x$", SyntaxProfile::CommonMark)
             .iter()
-            .all(|event| !matches!(
-                event,
-                pulldown_cmark::Event::InlineMath(_) | pulldown_cmark::Event::DisplayMath(_)
-            )));
+            .all(|event| !matches!(event, Event::InlineMath(_) | Event::DisplayMath(_))));
         assert!(profile_events("$x$", SyntaxProfile::Gfm)
             .iter()
-            .all(|event| !matches!(
-                event,
-                pulldown_cmark::Event::InlineMath(_) | pulldown_cmark::Event::DisplayMath(_)
-            )));
+            .all(|event| !matches!(event, Event::InlineMath(_) | Event::DisplayMath(_))));
     }
 
     #[test]
@@ -1086,7 +1257,7 @@ mod tests {
         // GFM 0.29-gfm example 622 uses this www address in ordinary prose.
         let source = "www.commonmark.org\n\n```\nwww.commonmark.org\n```";
         let mut html = String::new();
-        pulldown_cmark::html::push_html(
+        html::push_html(
             &mut html,
             profile_events(source, SyntaxProfile::Gfm).into_iter(),
         );
@@ -1191,6 +1362,92 @@ mod tests {
     }
 
     #[test]
+    fn shared_boundary_fixtures_match_full_and_window_source_blocks() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../src/shared/markdown-boundary-fixtures.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            let source = case["source"].as_str().unwrap();
+            let full = render_markdown(source).unwrap();
+            for needle in case["htmlContains"].as_array().unwrap() {
+                assert!(
+                    full.html.contains(needle.as_str().unwrap()),
+                    "{} missing {needle}: {}",
+                    case["id"],
+                    full.html
+                );
+            }
+            for needle in case["htmlExcludes"].as_array().unwrap() {
+                assert!(
+                    !full.html.contains(needle.as_str().unwrap()),
+                    "{} unexpectedly renders {needle}",
+                    case["id"]
+                );
+            }
+            let blocks = case["blocks"].as_array().unwrap();
+            assert_eq!(full.source_blocks.len(), blocks.len(), "{}", case["id"]);
+            for (actual, expected) in full.source_blocks.iter().zip(blocks) {
+                let byte = source.find(expected["text"].as_str().unwrap()).unwrap();
+                assert_eq!(
+                    actual.start_utf16,
+                    source[..byte].encode_utf16().count(),
+                    "{}",
+                    case["id"]
+                );
+                assert_eq!(
+                    actual.start_line,
+                    expected["line"].as_u64().unwrap() as usize
+                );
+            }
+            let (_, session) = super::prepare_virtual_preview(source, "boundary".into()).unwrap();
+            let window = session.render_window(0, 1).unwrap();
+            assert_eq!(window.segments[0].html, full.html, "{}", case["id"]);
+            assert_eq!(
+                serde_json::to_value(&window.segments[0].source_blocks).unwrap(),
+                serde_json::to_value(&full.source_blocks).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn source_lines_follow_commonmark_lf_crlf_and_cr_without_changing_offsets() {
+        for ending in ["\n", "\r\n", "\r"] {
+            let source = ["# 中文😀", "", "Body", "", "## Second", ""].join(ending);
+            let full = render_markdown(&source).unwrap();
+            assert_eq!(
+                full.outline
+                    .iter()
+                    .map(|item| item.line)
+                    .collect::<Vec<_>>(),
+                [1, 5],
+                "{ending:?}"
+            );
+            assert_eq!(full.stats.line_count, 6, "{ending:?}");
+            assert_eq!(
+                full.source_blocks
+                    .iter()
+                    .map(|block| block.start_line)
+                    .collect::<Vec<_>>(),
+                [1, 3, 5],
+                "{ending:?}"
+            );
+            let (_, session) =
+                super::prepare_virtual_preview(&source, "line-endings".into()).unwrap();
+            let window = session.render_window(0, 1).unwrap();
+            assert_eq!(
+                serde_json::to_value(&full.source_blocks).unwrap(),
+                serde_json::to_value(&window.segments[0].source_blocks).unwrap()
+            );
+            let byte = source.find("## Second").unwrap();
+            assert_eq!(
+                full.source_blocks[2].start_utf16,
+                source[..byte].encode_utf16().count()
+            );
+        }
+    }
+
+    #[test]
     fn line_cursor_advances_once_across_dense_heading_offsets() {
         let markdown = (0..10_000)
             .map(|index| format!("# Heading {index}\n"))
@@ -1206,5 +1463,71 @@ mod tests {
             search_from = offset + 1;
         }
         assert_eq!(cursor.offset, markdown.rfind('#').unwrap());
+    }
+}
+
+#[cfg(test)]
+mod document_toc_tests {
+    use super::*;
+
+    #[test]
+    fn toc_uses_full_outline_and_original_source_positions() {
+        let source = "[TOC]\n\n# 中文\n\n[TOC]\n\n## 中文\n\n[TOC]";
+        let rendered = render_markdown(source).unwrap();
+        assert_eq!(rendered.outline.len(), 2);
+        assert!(rendered.html.contains("class=\"toc-level-1\""));
+        assert!(rendered.html.contains("class=\"toc-level-2\""));
+        assert_eq!(
+            rendered.html.matches("<ul class=\"document-toc\">").count(),
+            3
+        );
+        assert!(!rendered.html.contains("[TOC]"));
+        let document = normalized_document(source);
+        let tocs: Vec<_> = document
+            .events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| {
+                if let Event::Toc(toc) = event {
+                    Some((index, toc))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(tocs.len(), 3);
+        for (index, toc) in tocs {
+            assert_eq!(toc.headings(), rendered.outline.as_slice());
+            let block = &document.source_blocks[document.event_blocks[index].unwrap()];
+            assert!(matches!(block.start_line, 1 | 5 | 9));
+        }
+        assert_ne!(rendered.outline[0].slug, rendered.outline[1].slug);
+    }
+
+    #[test]
+    fn toc_does_not_capture_code_escapes_nested_or_reference_links() {
+        for source in [
+            "`[TOC]`",
+            "```md\n[TOC]\n```",
+            "\\[TOC]",
+            "> [TOC]",
+            "- [TOC]",
+            "Text [TOC]",
+            "[TOC]\n\n[TOC]: https://example.com",
+        ] {
+            let document = normalized_document(source);
+            assert!(
+                !document
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, Event::Toc(_))),
+                "{source}"
+            );
+        }
+        for profile in [SyntaxProfile::CommonMark, SyntaxProfile::Gfm] {
+            assert!(!profile_events("[TOC]\n\n# Heading", profile)
+                .iter()
+                .any(|event| matches!(event, Event::Toc(_))));
+        }
     }
 }

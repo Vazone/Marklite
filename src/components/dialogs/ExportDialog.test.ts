@@ -36,6 +36,23 @@ afterEach(async () => {
 });
 
 describe('ExportDialog', () => {
+  test('shows only formats that the current platform can export', async () => {
+    const callbacks = await renderDialog({ availableExportFormats: ['svg'] });
+    const selector = target.querySelector<HTMLSelectElement>('select')!;
+    expect([...selector.options].map(option => option.value)).toEqual(['svg']);
+    target.querySelector<HTMLFormElement>('form')!.dispatchEvent(
+      new SubmitEvent('submit', { bubbles: true, cancelable: true })
+    );
+    expect(callbacks.onExport).toHaveBeenCalledWith('svg', expect.any(Object));
+  });
+
+  test('hides local image embedding until Android resource export is available', async () => {
+    await renderDialog({ availableExportFormats: ['html', 'docx', 'svg'], allowLocalImageExport: false });
+    const selector = target.querySelector<HTMLSelectElement>('select')!;
+    expect([...selector.options].map(option => option.value)).toEqual(['html', 'docx', 'svg']);
+    expect(target.textContent).not.toContain('Embed local images');
+  });
+
   test('offers HTML, PDF, DOCX and the single SVG mind-map format through one modal', async () => {
     const callbacks = await renderDialog();
     const dialog = target.querySelector<HTMLElement>('[role="dialog"]')!;

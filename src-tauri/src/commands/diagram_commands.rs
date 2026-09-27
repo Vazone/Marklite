@@ -27,9 +27,11 @@ pub async fn get_diagram_runtime_status() -> Result<DiagramRuntimeStatus, AppErr
 #[tauri::command]
 pub async fn load_diagram_runtime() -> Result<DiagramRuntimeAsset, AppError> {
     let root = app_data_dir()?;
-    tauri::async_runtime::spawn_blocking(move || diagram_runtime_service::load_from_root(&root))
-        .await
-        .map_err(|error| AppError::background_task_failed("加载 Mermaid runtime", error))?
+    tauri::async_runtime::spawn_blocking(move || {
+        diagram_runtime_service::load_for_current_platform(&root)
+    })
+    .await
+    .map_err(|error| AppError::background_task_failed("加载 Mermaid runtime", error))?
 }
 
 #[tauri::command]

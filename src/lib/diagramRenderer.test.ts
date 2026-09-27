@@ -37,14 +37,14 @@ function controlledPort() {
   const executions: Array<{
     source: DiagramSource;
     resolve(value: UntrustedRenderedDiagram): void;
-    reject(error: Error): void;
+    reject(error: unknown): void;
     terminate: ReturnType<typeof vi.fn>;
   }> = [];
   const release = vi.fn();
   const port: DiagramExecutionPort = {
     start(item): DiagramExecution {
       let resolve!: (value: UntrustedRenderedDiagram) => void;
-      let reject!: (error: Error) => void;
+      let reject!: (error: unknown) => void;
       const result = new Promise<UntrustedRenderedDiagram>((ok, fail) => {
         resolve = ok;
         reject = fail;
@@ -220,6 +220,16 @@ describe('bounded diagram renderer', () => {
     await vi.waitFor(() => expect(executions).toHaveLength(2));
     executions[1].resolve(output(item, 'retry'));
     await expect(retry).resolves.toMatchObject({ artifacts: [{ diagramId: item.diagramId }] });
+  });
+
+  test('preserves a missing-pack error from the native command', async () => {
+    const { port, executions } = controlledPort();
+    const renderer = new DiagramRenderer(port, validate);
+    const failed = renderer.render([source(0)], [], 'light');
+    await vi.waitFor(() => expect(executions).toHaveLength(1));
+    executions[0].reject({ code: 'DIAGRAM_RUNTIME_UNAVAILABLE', message: 'Pack missing' });
+    await expect(failed).rejects.toMatchObject({ code: 'DIAGRAM_RUNTIME_UNAVAILABLE', message: 'Pack missing' });
+    expect(renderer.cacheStats().entries).toBe(0);
   });
 
   test('keeps the shared cache bounded through 100 render and release cycles', async () => {

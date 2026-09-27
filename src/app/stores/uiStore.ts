@@ -11,7 +11,7 @@ import {
 } from '../../lib/sidebarResize';
 
 export type LayoutMode = 'edit' | 'split' | 'preview';
-export type SidebarTab = 'recent' | 'outline' | 'info';
+export type SidebarTab = 'recent' | 'outline' | 'info' | 'files';
 export type ToastTone = 'info' | 'success' | 'error';
 
 export type Toast = {

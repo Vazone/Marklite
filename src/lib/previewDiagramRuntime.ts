@@ -3,10 +3,14 @@ import { DiagramRenderer, type DiagramPresentation } from './diagramRenderer';
 import { MermaidSandboxPort } from './mermaidSandboxPort';
 import type { DiagramDiagnostic, DiagramSource, DiagramTheme } from './platform/contracts';
 
-const renderer = new DiagramRenderer(
-  new MermaidSandboxPort(() => api.loadDiagramRuntime()),
-  (diagram) => api.validateDiagramSvg(diagram)
-);
+function createRenderer() {
+  return new DiagramRenderer(
+    new MermaidSandboxPort(() => api.loadDiagramRuntime()),
+    (diagram) => api.validateDiagramSvg(diagram)
+  );
+}
+
+let renderer = createRenderer();
 
 export const previewDiagramRuntime = {
   render(
@@ -22,6 +26,10 @@ export const previewDiagramRuntime = {
   },
   release() {
     renderer.release();
+  },
+  reset() {
+    renderer.dispose();
+    renderer = createRenderer();
   },
   cacheStats() {
     return renderer.cacheStats();

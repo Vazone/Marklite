@@ -9,6 +9,20 @@ function intent(activePath: string | null): SessionPersistIntent {
 }
 
 describe('session persistence coordinator', () => {
+  test('copies Android resource sessions before the caller mutates its array', async () => {
+    vi.useFakeTimers();
+    const persist = vi.fn(async () => undefined);
+    const coordinator = createSessionCoordinator({ persist, onError: vi.fn() });
+    coordinator.setWritable(true);
+    const resource = { kind: 'androidDocument' as const, uri: 'content://provider/a.md' };
+    const session = { version: 2 as const, resources: [resource], activeResource: resource };
+    coordinator.queue({ enabled: true, session });
+    session.resources.length = 0;
+    await vi.advanceTimersByTimeAsync(200);
+    expect(persist).toHaveBeenCalledWith({ enabled: true,
+      session: { version: 2, resources: [resource], activeResource: resource } });
+    vi.useRealTimers();
+  });
   test('never writes when restore did not grant write permission', async () => {
     vi.useFakeTimers();
     const persist = vi.fn(async () => undefined);
@@ -29,7 +43,7 @@ describe('session persistence coordinator', () => {
     coordinator.setWritable(true);
     const first = intent('C:\\first.md');
     coordinator.queue(first);
-    first.session.paths[0] = 'C:\\mutated.md';
+    if (first.session.version === 1) first.session.paths[0] = 'C:\\mutated.md';
     coordinator.queue(intent('C:\\latest.md'));
 
     await vi.advanceTimersByTimeAsync(200);

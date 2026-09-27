@@ -89,7 +89,7 @@ impl ImageLoadState {
 }
 
 impl ImageLoadLease {
-    fn is_cancelled(&self) -> bool {
+    pub(crate) fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
     }
 }
@@ -203,20 +203,11 @@ fn load_local_images(
 
             let display_path = path_to_utf8(&path)?.to_string();
             let loaded =
-                read_local_image_bytes(&path, "加载图片", Some(lease)).and_then(|(bytes, mime)| {
-                    let dimensions = imagesize::blob_size(&bytes)
-                        .map_err(|_| AppError::unsupported_image_type(&display_path))?;
-                    let encoded = u64::try_from(bytes.len())
+                read_local_image_bytes(&path, "加载图片", Some(lease)).and_then(|(bytes, _)| {
+                    let resource = preview_resource_from_bytes(display_path.clone(), bytes)?;
+                    let encoded = u64::try_from(resource.image.bytes.len())
                         .map_err(|_| AppError::preview_image_budget_exceeded())?;
-                    let decoded = u64::try_from(dimensions.width)
-                        .ok()
-                        .and_then(|width| {
-                            u64::try_from(dimensions.height)
-                                .ok()
-                                .and_then(|height| width.checked_mul(height))
-                        })
-                        .and_then(|pixels| pixels.checked_mul(4))
-                        .ok_or_else(AppError::preview_image_budget_exceeded)?;
+                    let decoded = resource.decoded_bytes;
                     if encoded_bytes.saturating_add(encoded) > MAX_PREVIEW_ENCODED_BYTES
                         || decoded_bytes.saturating_add(decoded) > MAX_PREVIEW_DECODED_BYTES
                     {
@@ -225,16 +216,7 @@ fn load_local_images(
                     encoded_bytes += encoded;
                     decoded_bytes += decoded;
                     let index = resources.len();
-                    resources.push(PreviewImageResource {
-                        image: ExportImage {
-                            bytes,
-                            mime,
-                            path: display_path,
-                        },
-                        width: dimensions.width,
-                        height: dimensions.height,
-                        decoded_bytes: decoded,
-                    });
+                    resources.push(resource);
                     Ok(index)
                 });
             canonical.insert(path, loaded.clone());
@@ -261,6 +243,33 @@ fn load_local_images(
     }
 
     Ok(PreviewImageBatch { entries, resources })
+}
+
+pub(crate) fn preview_resource_from_bytes(
+    path: String,
+    bytes: Vec<u8>,
+) -> Result<PreviewImageResource, AppError> {
+    if bytes.len() as u64 > MAX_IMAGE_SIZE {
+        return Err(AppError::file_too_large(&path, "加载图片"));
+    }
+    let mime = image_mime(Path::new(&path), &bytes)?;
+    let dimensions =
+        imagesize::blob_size(&bytes).map_err(|_| AppError::unsupported_image_type(&path))?;
+    let decoded_bytes = u64::try_from(dimensions.width)
+        .ok()
+        .and_then(|width| {
+            u64::try_from(dimensions.height)
+                .ok()
+                .and_then(|height| width.checked_mul(height))
+        })
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(AppError::preview_image_budget_exceeded)?;
+    Ok(PreviewImageResource {
+        image: ExportImage { bytes, mime, path },
+        width: dimensions.width,
+        height: dimensions.height,
+        decoded_bytes,
+    })
 }
 
 #[cfg(test)]

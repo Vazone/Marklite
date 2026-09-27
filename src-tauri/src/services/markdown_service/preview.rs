@@ -1,9 +1,10 @@
+use crate::models::markdown_event::Event;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, Mutex,
 };
 
-use pulldown_cmark::{Event, Tag, TagEnd};
+use pulldown_cmark::{Tag, TagEnd};
 
 use crate::models::{
     app_error::AppError,
@@ -24,8 +25,11 @@ const MAX_SOURCE_BYTES_PER_SEGMENT: usize = 32 * 1024;
 const OVERSIZED_BLOCK_BYTES: usize = 128 * 1024;
 const MAX_NODES_PER_SEGMENT: usize = 4_000;
 const MAX_WINDOW_SEGMENTS: usize = 12;
+const MIN_VIRTUAL_PREVIEW_SOURCE_BLOCKS: usize = 4_096;
 
+#[derive(Clone)]
 struct IndexedSegment {
+    source_continuation: bool,
     events: Vec<Event<'static>>,
     source_override: Option<SourceBlock>,
     source_block_start: usize,
@@ -120,11 +124,40 @@ impl PreviewState {
     }
 }
 
+pub fn prepare_preview(
+    markdown: &str,
+    session_id: String,
+) -> Result<(RenderedMarkdownDto, Option<PreviewSession>), AppError> {
+    let analyzed = analyze_with_events(markdown, true);
+    // Source bytes alone miss documents with thousands of short blocks (or
+    // TOCs). Select a bounded DOM before serializing any full-document HTML.
+    if markdown.len() >= 1024 * 1024
+        || analyzed.2.len() >= MIN_VIRTUAL_PREVIEW_SOURCE_BLOCKS
+        || analyzed
+            .1
+            .iter()
+            .any(|event| matches!(event, Event::Toc(_)))
+    {
+        let (dto, session) = prepare_index(markdown, session_id, analyzed)?;
+        Ok((dto, Some(session)))
+    } else {
+        Ok((super::render_analyzed(analyzed)?, None))
+    }
+}
+
+#[cfg(test)]
 pub fn prepare_virtual_preview(
     markdown: &str,
     session_id: String,
 ) -> Result<(RenderedMarkdownDto, PreviewSession), AppError> {
-    let (analysis, events, source_blocks, diagrams) = analyze_with_events(markdown, true);
+    prepare_index(markdown, session_id, analyze_with_events(markdown, true))
+}
+
+fn prepare_index(
+    markdown: &str,
+    session_id: String,
+    (analysis, events, source_blocks, diagrams): super::AnalyzedMarkdown,
+) -> Result<(RenderedMarkdownDto, PreviewSession), AppError> {
     let segments = partition_events(events, &source_blocks, markdown)?;
     let diagram_diagnostics = diagram_service::validate_sources(&diagrams);
     let directory = segments
@@ -139,6 +172,7 @@ pub fn prepare_virtual_preview(
                 .as_ref()
                 .unwrap_or(&source_blocks[segment.source_block_end - 1]);
             VirtualPreviewSegment {
+                source_continuation: segment.source_continuation.then_some(true),
                 start_utf16: first.start_utf16,
                 end_utf16: last.end_utf16,
                 start_line: first.start_line,
@@ -149,6 +183,7 @@ pub fn prepare_virtual_preview(
         })
         .collect();
     let dto = RenderedMarkdownDto {
+        markdown_diagnostics: analysis.markdown_diagnostics,
         html: String::new(),
         outline: analysis.outline.clone(),
         stats: analysis.stats,
@@ -463,9 +498,22 @@ fn finish_segment(
     let estimated_height = if oversized {
         64
     } else {
-        (line_count * 20 + (block_end - block_start) * 18).max(32)
+        (line_count * 20
+            + (block_end - block_start) * 18
+            + events
+                .iter()
+                .map(|event| {
+                    if let Event::Toc(toc) = event {
+                        toc.headings().len() * 24
+                    } else {
+                        0
+                    }
+                })
+                .sum::<usize>())
+        .max(32)
     };
     IndexedSegment {
+        source_continuation: false,
         estimated_nodes: if oversized {
             1
         } else {
@@ -493,6 +541,24 @@ fn expand_oversized_segment(
 ) -> Vec<IndexedSegment> {
     if !segment.oversized || segment.source_block_end - segment.source_block_start != 1 {
         return vec![segment];
+    }
+    if let [marker, Event::Toc(toc)] = segment.events.as_slice() {
+        return toc
+            .chunks(128, MAX_SOURCE_BYTES_PER_SEGMENT)
+            .enumerate()
+            .map(|(index, part)| {
+                let oversized = part.text_bytes() > OVERSIZED_BLOCK_BYTES;
+                IndexedSegment {
+                    source_continuation: index > 0,
+                    estimated_height: (part.headings().len() * 24 + 32).max(32),
+                    estimated_nodes: 1 + part.headings().len() * 3,
+                    events: vec![marker.clone(), Event::Toc(part)],
+                    oversized,
+                    oversized_excerpt: oversized.then(|| "[TOC] 单个标题超过预览块预算".into()),
+                    ..segment.clone()
+                }
+            })
+            .collect();
     }
     if let [_, Event::Start(Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Fenced(info))), middle @ .., Event::End(TagEnd::CodeBlock)] =
         segment.events.as_slice()
@@ -572,6 +638,7 @@ fn expand_oversized_segment(
                 .filter(|event| matches!(event, Event::InlineMath(_) | Event::DisplayMath(_)))
                 .count();
             IndexedSegment {
+                source_continuation: false,
                 estimated_height: (line_count * 20 + 32).max(32),
                 estimated_nodes: events.len(),
                 events,
@@ -734,9 +801,11 @@ fn source_line_boundaries(markdown: &str, block: &SourceBlock) -> Vec<usize> {
     };
     let mut boundaries = vec![block.start_utf16];
     let mut offset = block.start_utf16;
-    for character in markdown[start..end].chars() {
+    for (byte, character) in markdown[start..end].char_indices() {
         offset += character.len_utf16();
-        if character == '\n' {
+        if character == '\n'
+            || (character == '\r' && markdown.as_bytes().get(start + byte + 1) != Some(&b'\n'))
+        {
             boundaries.push(offset);
         }
     }
@@ -758,6 +827,7 @@ fn marker_index(event: &Event<'_>) -> Option<usize> {
 
 fn event_weight(event: &Event<'_>) -> usize {
     match event {
+        Event::Toc(toc) => toc.text_bytes(),
         Event::Text(value)
         | Event::Code(value)
         | Event::Html(value)
@@ -770,10 +840,11 @@ fn event_weight(event: &Event<'_>) -> usize {
 
 fn event_node_weight(event: &Event<'_>) -> usize {
     match event {
+        Event::Toc(toc) => 1 + toc.headings().len() * 3,
         Event::Html(value) | Event::InlineHtml(value) => {
             value.bytes().filter(|byte| *byte == b'<').count().max(1)
         }
-        Event::Start(_) | Event::Rule => 1,
+        Event::Start(_) | Event::StartHighlight | Event::Rule => 1,
         _ => 0,
     }
 }
@@ -782,6 +853,91 @@ fn event_node_weight(event: &Event<'_>) -> usize {
 mod tests {
     use super::{prepare_virtual_preview, PreviewState};
     use crate::services::markdown_service::render_markdown;
+
+    #[test]
+    fn preview_selection_detects_toc_expansion_in_small_sources_with_one_parse() {
+        let source = format!("{}{}", "[TOC]\n\n".repeat(100), "# Heading\n\n".repeat(500));
+        assert!(source.len() < 1024 * 1024);
+        let before =
+            crate::services::markdown_service::SOURCE_PARSE_COUNT.with(|count| count.get());
+        let (dto, session) = super::prepare_preview(&source, "small-tocs".into()).unwrap();
+        let after = crate::services::markdown_service::SOURCE_PARSE_COUNT.with(|count| count.get());
+        assert_eq!(after - before, 1);
+        assert!(dto.html.is_empty());
+        assert!(dto.virtual_preview.is_some());
+        let session = session.unwrap();
+        let window = session.render_window(0, 1).unwrap();
+        assert!(window.segments[0].html.contains("<a "));
+        assert!(!window.segments[0].html.contains("[TOC]"));
+
+        for literal in ["# Plain\n\nBody", "```md\n[TOC]\n```", "\\[TOC]"] {
+            let before =
+                crate::services::markdown_service::SOURCE_PARSE_COUNT.with(|count| count.get());
+            let (dto, session) = super::prepare_preview(literal, "plain".into()).unwrap();
+            let after =
+                crate::services::markdown_service::SOURCE_PARSE_COUNT.with(|count| count.get());
+            assert_eq!(after - before, 1);
+            assert!(session.is_none());
+            assert!(dto.virtual_preview.is_none());
+            assert!(!dto.html.is_empty());
+        }
+    }
+
+    #[test]
+    fn block_dense_small_source_uses_window_without_truncating_large_single_block() {
+        let dense = "# Heading\n\nParagraph with **bold** and [link](https://example.invalid).\n\n"
+            .repeat(4_200);
+        assert!(dense.len() < 1024 * 1024);
+        let (dto, session) = super::prepare_preview(&dense, "dense".into()).unwrap();
+        assert!(dto.html.is_empty());
+        assert!(dto.virtual_preview.is_some());
+        let first = session.unwrap().render_window(0, 1).unwrap();
+        assert!(first.segments[0].html.contains("Heading"));
+
+        let single_block = format!("# Heading\n\n{}", "content ".repeat(70_000));
+        assert!(single_block.len() < 1024 * 1024);
+        let (dto, session) = super::prepare_preview(&single_block, "single".into()).unwrap();
+        assert!(session.is_none());
+        assert!(dto.virtual_preview.is_none());
+        assert!(dto.html.contains("content"));
+    }
+
+    #[test]
+    fn long_toc_windows_keep_all_targets_with_bounded_nodes_and_real_source() {
+        let mut source = String::from("[TOC]\n\n");
+        for _ in 0..10_000 {
+            source.push_str("# 中文\n\n");
+        }
+        let (dto, session) = prepare_virtual_preview(&source, "toc-large".into()).unwrap();
+        let directory = dto.virtual_preview.unwrap();
+        let mut seen = 0;
+        let mut parts = 0;
+        for (index, segment) in session.segments.iter().enumerate() {
+            if let [_, super::Event::Toc(toc)] = segment.events.as_slice() {
+                assert!(!segment.oversized);
+                assert!(segment.estimated_nodes <= super::MAX_NODES_PER_SEGMENT);
+                assert!(toc.headings().len() <= 128);
+                assert_eq!(directory.segments[index].start_utf16, 0);
+                assert_eq!(directory.segments[index].end_utf16, 6);
+                assert_eq!(
+                    directory.segments[index].source_continuation,
+                    (parts > 0).then_some(true)
+                );
+                assert_eq!(toc.headings()[0].slug, dto.outline[seen].slug);
+                let window = session.render_window(index, index + 1).unwrap();
+                assert_eq!(
+                    window.segments[0].html.matches("<a ").count(),
+                    toc.headings().len()
+                );
+                assert_eq!(window.segments[0].source_blocks[0].start_line, 1);
+                assert_eq!(window.segments[0].source_blocks[0].end_utf16, 6);
+                seen += toc.headings().len();
+                parts += 1;
+            }
+        }
+        assert!(parts > 1);
+        assert_eq!(seen, 10_000);
+    }
 
     #[test]
     fn windows_keep_reference_links_and_global_heading_ids() {
@@ -870,30 +1026,33 @@ mod tests {
 
     #[test]
     fn long_code_is_windowed_by_lines_without_losing_code_semantics() {
-        let mut source = String::from("```rust\n");
-        for index in 0..12000 {
-            source.push_str(&format!("let row_{index} = \"中😀\";\n"));
+        for ending in ["\n", "\r\n", "\r"] {
+            let mut source = String::from("```rust\n");
+            for index in 0..12000 {
+                source.push_str(&format!("let row_{index} = \"中😀\";\n"));
+            }
+            source.push_str("```\n");
+            let source = source.replace('\n', ending);
+            let (dto, session) = prepare_virtual_preview(&source, "code".into()).unwrap();
+            let directory = dto.virtual_preview.unwrap();
+            assert!(directory.segments.len() > 1);
+            assert!(directory
+                .segments
+                .windows(2)
+                .all(|pair| pair[0].end_utf16 == pair[1].start_utf16));
+            assert_eq!(
+                directory.segments.last().unwrap().end_utf16,
+                render_markdown(&source).unwrap().source_blocks[0].end_utf16
+            );
+            let first = session.render_window(0, 1).unwrap();
+            let last = session
+                .render_window(directory.segments.len() - 1, directory.segments.len())
+                .unwrap();
+            assert!(first.segments[0].html.contains("<pre><code"));
+            assert!(first.segments[0].html.contains("row_0"));
+            assert!(last.segments[0].html.contains("row_11999"));
+            assert!(first.segments[0].html.len() < 40_000);
         }
-        source.push_str("```\n");
-        let (dto, session) = prepare_virtual_preview(&source, "code".into()).unwrap();
-        let directory = dto.virtual_preview.unwrap();
-        assert!(directory.segments.len() > 1);
-        assert!(directory
-            .segments
-            .windows(2)
-            .all(|pair| pair[0].end_utf16 == pair[1].start_utf16));
-        assert_eq!(
-            directory.segments.last().unwrap().end_utf16,
-            render_markdown(&source).unwrap().source_blocks[0].end_utf16
-        );
-        let first = session.render_window(0, 1).unwrap();
-        let last = session
-            .render_window(directory.segments.len() - 1, directory.segments.len())
-            .unwrap();
-        assert!(first.segments[0].html.contains("<pre><code"));
-        assert!(first.segments[0].html.contains("row_0"));
-        assert!(last.segments[0].html.contains("row_11999"));
-        assert!(first.segments[0].html.len() < 40_000);
     }
 
     #[test]

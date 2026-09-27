@@ -207,6 +207,7 @@ fn strict_requests_reject_misspelled_or_unknown_fields() {
 fn shared_fixture_round_trips_render_navigation_export_and_diagnostics() {
     let fixtures = fixtures();
     let rendered = RenderedMarkdownDto {
+        markdown_diagnostics: Vec::new(),
         html: "<h1 id=\"contract\">Contract</h1>".to_string(),
         outline: vec![OutlineItem {
             level: 1,
@@ -245,6 +246,7 @@ fn shared_fixture_round_trips_render_navigation_export_and_diagnostics() {
         fixtures.rendered_markdown
     );
     let analysis = MarkdownAnalysisDto {
+        markdown_diagnostics: Vec::new(),
         outline: vec![OutlineItem {
             level: 1,
             title: "Contract".to_string(),
@@ -270,7 +272,10 @@ fn shared_fixture_round_trips_render_navigation_export_and_diagnostics() {
             fragment: "contract".to_string(),
         },
         MarkdownTargetDto::LocalDocument {
-            path: r"C:\notes\other.md".to_string(),
+            resource: crate::models::resource::ResourceRef::DesktopFile {
+                path: r"C:\notes\other.md".to_string(),
+            },
+            path: Some(r"C:\notes\other.md".to_string()),
             fragment: Some("section".to_string()),
         },
         MarkdownTargetDto::External {
@@ -323,6 +328,7 @@ fn shared_fixture_freezes_virtual_preview_index_and_window() {
         session_id: "session-7".into(),
         segments: vec![
             VirtualPreviewSegment {
+                source_continuation: None,
                 start_utf16: 0,
                 end_utf16: 16,
                 start_line: 1,
@@ -331,6 +337,7 @@ fn shared_fixture_freezes_virtual_preview_index_and_window() {
                 estimated_nodes: 2,
             },
             VirtualPreviewSegment {
+                source_continuation: None,
                 start_utf16: 16,
                 end_utf16: 32,
                 start_line: 3,

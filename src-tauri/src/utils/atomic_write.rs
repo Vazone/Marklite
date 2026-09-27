@@ -53,10 +53,12 @@ pub enum CheckedWriteError<E> {
     Write(io::Error),
 }
 
-/// Revalidates caller-owned state and replaces the target while holding the
+/// Prepares and syncs the temporary file, then revalidates caller-owned state
+/// immediately before replacing the target while holding the
 /// same per-file transaction lock. The check therefore cannot race another
 /// MarkLite writer for the same existing file, hard-link alias, or missing
-/// target name.
+/// target name. External writers do not share this lock: this is not a
+/// filesystem compare-and-swap guarantee.
 pub fn atomic_write_checked<E>(
     path: &Path,
     content: &[u8],
@@ -68,9 +70,11 @@ pub fn atomic_write_checked<E>(
     let guard = target_lock
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let result = check(path)
-        .map_err(CheckedWriteError::Check)
-        .and_then(|()| atomic_write_locked(path, &mut &*content).map_err(CheckedWriteError::Write));
+    let result = (|| {
+        let temp = prepare_temp(path, &mut &*content).map_err(CheckedWriteError::Write)?;
+        check(path).map_err(CheckedWriteError::Check)?;
+        publish_temp(temp, path).map_err(CheckedWriteError::Write)
+    })();
     drop(guard);
     drop(target_lock);
     release_target_lock(&lock_key, &lock_identity);
@@ -92,6 +96,10 @@ pub fn atomic_write_from(path: &Path, source: &mut impl Read) -> io::Result<()> 
 }
 
 fn atomic_write_locked(path: &Path, source: &mut impl Read) -> io::Result<()> {
+    publish_temp(prepare_temp(path, source)?, path)
+}
+
+fn prepare_temp(path: &Path, source: &mut impl Read) -> io::Result<OwnedTempFile> {
     let mut temp = create_temp_file(path)?;
     #[cfg(test)]
     run_write_hook(path);
@@ -100,7 +108,10 @@ fn atomic_write_locked(path: &Path, source: &mut impl Read) -> io::Result<()> {
     preserve_existing_permissions(temp.file_mut(), path)?;
     temp.file_mut().sync_all()?;
     temp.close();
+    Ok(temp)
+}
 
+fn publish_temp(mut temp: OwnedTempFile, path: &Path) -> io::Result<()> {
     replace_file(temp.path(), path)?;
     temp.mark_committed();
     sync_parent_directory(path)?;
@@ -628,6 +639,46 @@ mod tests {
 
     fn test_path(name: &str) -> TestPath {
         TestPath::new("atomic-write", format!("{name}.txt"))
+    }
+
+    #[test]
+    fn checked_write_prepares_content_before_final_check_and_preserves_external_change() {
+        let target = test_path("late-conflict");
+        fs::write(&target, b"original").unwrap();
+        let pending = b"unsaved editor content";
+        let error = super::atomic_write_checked(&target, pending, |path| {
+            let staged = fs::read_dir(path.parent().unwrap())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|entry| entry != path)
+                .expect("complete temporary file must exist before checking the target");
+            assert_eq!(fs::read(staged).unwrap(), pending);
+            assert_eq!(fs::read(path).unwrap(), b"original");
+            // An external editor does not participate in MarkLite's lock.
+            fs::write(path, b"external content").unwrap();
+            Err("content changed")
+        })
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            super::CheckedWriteError::Check("content changed")
+        ));
+        assert_eq!(fs::read(&target).unwrap(), b"external content");
+        assert_eq!(pending, b"unsaved editor content");
+        assert_eq!(fs::read_dir(target.parent().unwrap()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn checked_write_publishes_only_after_successful_check() {
+        let target = test_path("late-check-success");
+        fs::write(&target, b"original").unwrap();
+        super::atomic_write_checked(&target, b"saved", |path| {
+            assert_eq!(fs::read(path).unwrap(), b"original");
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"saved");
+        assert_eq!(fs::read_dir(target.parent().unwrap()).unwrap().count(), 1);
     }
 
     #[cfg(unix)]

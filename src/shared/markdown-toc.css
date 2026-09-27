@@ -1,0 +1,8 @@
+/* Shared by the preview and standalone HTML/PDF/PNG export surfaces. */
+ul.document-toc { list-style: none; padding-inline-start: 0; }
+.document-toc > li { margin-block: 0.25em; }
+.document-toc > .toc-level-2 { margin-inline-start: 1.5em; }
+.document-toc > .toc-level-3 { margin-inline-start: 3em; }
+.document-toc > .toc-level-4 { margin-inline-start: 4.5em; }
+.document-toc > .toc-level-5 { margin-inline-start: 6em; }
+.document-toc > .toc-level-6 { margin-inline-start: 7.5em; }

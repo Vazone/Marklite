@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import tauriConfig from '../../src-tauri/tauri.conf.json';
 import { describe, expect, test, vi } from 'vitest';
 import { buildMermaidSandboxDocument, MermaidSandboxPort } from './mermaidSandboxPort';
 
@@ -12,9 +14,12 @@ describe('Mermaid sandbox document', () => {
     expect(html).toContain('htmlLabels: true');
     expect(html).toContain('initialize(request.theme, fontFamily, fontSize)');
     expect(html).not.toContain('https://');
-    expect(html.replace('http://www.w3.org/2000/svg', '')).not.toContain('http://');
+    expect(html.replaceAll('http://www.w3.org/2000/svg', '')).not.toContain('http://');
     const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
     expect(() => new Function(scripts.at(-1)![1])).not.toThrow();
+    expect(scripts.at(-1)![1]).not.toContain('\r');
+    const bootstrapHash = createHash('sha256').update(scripts.at(-1)![1]).digest('base64');
+    expect(tauriConfig.app.security.csp).toContain(`'sha256-${bootstrapHash}'`);
   });
 
   test('release removes and rejects an iframe that is still waiting for load', async () => {
@@ -31,7 +36,7 @@ describe('Mermaid sandbox document', () => {
       sourceEndByte: 18
     }, {
       rendererId: 'mermaid-offline-11.17.2',
-      configVersion: 2,
+      configVersion: 3,
       theme: 'light',
       fontKey: 'Inter\u000016\u00001.5',
       fontFamily: 'Inter',
@@ -55,7 +60,7 @@ describe('Mermaid sandbox document', () => {
       diagramId: 'diagram-0-aaaaaaaaaaaa', ordinal: 0, sourceUtf8: 'flowchart TD\nA-->B',
       sourceSha256: 'a'.repeat(64), sourceStartByte: 0, sourceEndByte: 18
     }, {
-      rendererId: 'mermaid-offline-11.17.2', configVersion: 2,
+      rendererId: 'mermaid-offline-11.17.2', configVersion: 3,
       theme: 'light', fontKey: 'Arial\u000016\u00001.6',
       fontFamily: 'Arial', fontSize: 16, lineHeight: 1.6
     });
@@ -65,4 +70,39 @@ describe('Mermaid sandbox document', () => {
     await rejected;
     expect(document.querySelectorAll('iframe')).toHaveLength(0);
   });
+  test('release closes both channel endpoints while waiting for the ready handshake', async () => {
+    const channels: Array<{ port1: { close: ReturnType<typeof vi.fn>; start: ReturnType<typeof vi.fn>; onmessage: unknown }; port2: { close: ReturnType<typeof vi.fn> } }> = [];
+    class Channel {
+      port1 = { close: vi.fn(), start: vi.fn(), onmessage: null };
+      port2 = { close: vi.fn() };
+      constructor() { channels.push(this); }
+    }
+    vi.stubGlobal('MessageChannel', Channel);
+    const port = new MermaidSandboxPort(async () => ({
+      rendererId: 'mermaid-offline-11.17.2', scriptUtf8: ''
+    }));
+    try {
+      const execution = port.start({
+        diagramId: 'diagram-0-aaaaaaaaaaaa', ordinal: 0, sourceUtf8: 'flowchart TD\nA-->B',
+        sourceSha256: 'a'.repeat(64), sourceStartByte: 0, sourceEndByte: 18
+      }, {
+        rendererId: 'mermaid-offline-11.17.2', configVersion: 3,
+        theme: 'light', fontKey: 'Arial', fontFamily: 'Arial', fontSize: 16, lineHeight: 1.6
+      });
+      const rejected = expect(execution.result).rejects.toThrow('released');
+      await vi.waitFor(() => expect(document.querySelector('iframe')).not.toBeNull());
+      document.querySelector('iframe')!.dispatchEvent(new Event('load'));
+      expect(channels).toHaveLength(1);
+      port.release();
+      await rejected;
+      expect(channels[0].port1.close).toHaveBeenCalledOnce();
+      expect(channels[0].port2.close).toHaveBeenCalledOnce();
+      expect(channels[0].port1.onmessage).toBeNull();
+      expect(document.querySelectorAll('iframe')).toHaveLength(0);
+    } finally {
+      port.dispose();
+      vi.unstubAllGlobals();
+    }
+  });
+
 });

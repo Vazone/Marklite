@@ -17,6 +17,43 @@ pub enum ExportCommitPolicy {
 }
 
 pub(crate) fn validate_request(request: &ExportRequest) -> Result<PathBuf, AppError> {
+    validate_payload(request)?;
+    let expected_kind = if request.format == ExportFormat::Png {
+        ExportTargetKind::Directory
+    } else {
+        ExportTargetKind::File
+    };
+    if request.target_kind != expected_kind {
+        return Err(AppError::new(
+            "INVALID_EXPORT_TARGET",
+            "导出格式与文件/目录目标类型不一致",
+        ));
+    }
+    if request.format == ExportFormat::Png {
+        return super::png_artifact::validate_target(request);
+    }
+    let target = PathBuf::from(&request.target_path);
+    if !target.is_absolute()
+        || !target
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case(request.format.extension()))
+    {
+        return Err(AppError::new(
+            "INVALID_EXPORT_TARGET",
+            format!(
+                "导出目标必须是绝对 .{} 文件路径",
+                request.format.extension()
+            ),
+        ));
+    }
+    if target.exists() && !target.is_file() {
+        return Err(AppError::invalid_file_target(&request.target_path));
+    }
+    Ok(target)
+}
+
+pub(crate) fn validate_payload(request: &ExportRequest) -> Result<(), AppError> {
     if request.snapshot.job_id.trim().is_empty()
         || request.snapshot.tab_id.trim().is_empty()
         || request
@@ -53,39 +90,7 @@ pub(crate) fn validate_request(request: &ExportRequest) -> Result<PathBuf, AppEr
         }
         _ => {}
     }
-    let expected_kind = if request.format == ExportFormat::Png {
-        ExportTargetKind::Directory
-    } else {
-        ExportTargetKind::File
-    };
-    if request.target_kind != expected_kind {
-        return Err(AppError::new(
-            "INVALID_EXPORT_TARGET",
-            "导出格式与文件/目录目标类型不一致",
-        ));
-    }
-    if request.format == ExportFormat::Png {
-        return super::png_artifact::validate_target(request);
-    }
-    let target = PathBuf::from(&request.target_path);
-    if !target.is_absolute()
-        || !target
-            .extension()
-            .and_then(|value| value.to_str())
-            .is_some_and(|value| value.eq_ignore_ascii_case(request.format.extension()))
-    {
-        return Err(AppError::new(
-            "INVALID_EXPORT_TARGET",
-            format!(
-                "导出目标必须是绝对 .{} 文件路径",
-                request.format.extension()
-            ),
-        ));
-    }
-    if target.exists() && !target.is_file() {
-        return Err(AppError::invalid_file_target(&request.target_path));
-    }
-    Ok(target)
+    Ok(())
 }
 
 pub(crate) fn result(request: &ExportRequest, warnings: Vec<ExportWarning>) -> ExportResult {

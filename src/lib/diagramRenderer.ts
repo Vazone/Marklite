@@ -6,7 +6,7 @@ import type {
 } from './platform/contracts';
 
 export const DIAGRAM_RENDERER_ID = 'mermaid-offline-11.17.2' as const;
-export const DIAGRAM_CONFIG_VERSION = 2;
+export const DIAGRAM_CONFIG_VERSION = 3;
 export const DIAGRAM_DOCUMENT_DEADLINE_MS = 30_000;
 export const DIAGRAM_ITEM_DEADLINE_MS = 5_000;
 export const DIAGRAM_CACHE_ENTRIES = 64;
@@ -55,7 +55,7 @@ type ActiveExecution = {
 
 export class DiagramRenderError extends Error {
   constructor(
-    readonly code: 'DIAGRAM_TIMEOUT' | 'DIAGRAM_CANCELLED' | 'DIAGRAM_RUNTIME_CRASHED',
+    readonly code: 'DIAGRAM_TIMEOUT' | 'DIAGRAM_CANCELLED' | 'DIAGRAM_RUNTIME_CRASHED' | 'DIAGRAM_RUNTIME_UNAVAILABLE' | 'DIAGRAM_RUNTIME_INVALID',
     message: string
   ) {
     super(message);
@@ -156,9 +156,19 @@ export class DiagramRenderer {
       } catch (error) {
         if (error instanceof DiagramRenderError) throw error;
         this.assertCurrent(token);
+        const nativeError = error && typeof error === 'object'
+          ? error as { code?: unknown; message?: unknown }
+          : null;
+        if (
+          (nativeError?.code === 'DIAGRAM_RUNTIME_UNAVAILABLE' || nativeError?.code === 'DIAGRAM_RUNTIME_INVALID') &&
+          typeof nativeError.message === 'string'
+        ) {
+          throw new DiagramRenderError(nativeError.code, nativeError.message);
+        }
         throw new DiagramRenderError(
           'DIAGRAM_RUNTIME_CRASHED',
-          error instanceof Error ? error.message : 'Diagram runtime failed'
+          error instanceof Error ? error.message :
+            typeof nativeError?.message === 'string' ? nativeError.message : 'Diagram runtime failed'
         );
       } finally {
         if (timeoutId !== null) clearTimeout(timeoutId);

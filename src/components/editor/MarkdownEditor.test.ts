@@ -80,7 +80,7 @@ function editorView(): EditorView {
   return view!;
 }
 
-function applyFormatting(action: 'h1' | 'unorderedList' | 'orderedList' | 'taskList' | 'inlineCode' | 'codeBlock') {
+function applyFormatting(action: 'h1' | 'unorderedList' | 'orderedList' | 'taskList' | 'inlineCode' | 'codeBlock' | 'image' | 'table' | 'link') {
   (component as SvelteComponent & { applyMarkdown(action: string): void }).applyMarkdown(action);
 }
 
@@ -91,6 +91,42 @@ afterEach(() => {
 });
 
 describe('MarkdownEditor session and runtime configuration', () => {
+  test('toolbar leaves blank line formats ready to type and selects visible image/link text', async () => {
+    await renderEditor();
+    const view = editorView();
+    applyFormatting('h1');
+    expect(view.state.doc.toString()).toBe('# ');
+    expect(view.state.selection.main.head).toBe(2);
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: '' }, selection: EditorSelection.cursor(0) });
+    applyFormatting('image');
+    expect(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)).toBe('Image description');
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: '' }, selection: EditorSelection.cursor(0) });
+    applyFormatting('link');
+    expect(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)).toBe('link text');
+  });
+
+  test('table template has no example cell text to remove and starts in its first cell', async () => {
+    await renderEditor();
+    const view = editorView();
+    applyFormatting('table');
+    expect(view.state.doc.toString()).toBe('|  |  |\n| --- | --- |\n|  |  |');
+    expect(view.state.selection.main.head).toBe(2);
+  });
+
+  test('Ctrl+wheel zooms only editor content without changing text or layout width', async () => {
+    await renderEditor({}, 'one\ntwo');
+    const host = target.querySelector<HTMLElement>('.editor-host')!;
+    const editor = editorView();
+    const width = editor.dom.style.width;
+    const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -100 });
+    editor.scrollDOM.dispatchEvent(wheel);
+    expect(wheel.defaultPrevented).toBe(true);
+    expect(editor.dom.style.transform).toContain('scale(');
+    expect(host.style.transform).toBe('');
+    expect(editor.dom.style.width).toBe(width);
+    expect(editor.state.doc.toString()).toBe('one\ntwo');
+  });
+
   test('converts task lines without leaving a checkbox marker and toggles repeated format', async () => {
     await renderEditor({}, '- [x] 中文 task');
     const view = editorView();

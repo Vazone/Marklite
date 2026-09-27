@@ -1,3 +1,12 @@
+#[path = "diagram_service/config_policy.rs"]
+mod config_policy;
+#[path = "diagram_service/shape_policy.rs"]
+mod shape_policy;
+#[path = "diagram_service/statements.rs"]
+mod statements;
+#[path = "diagram_service/style_policy.rs"]
+mod style_policy;
+
 use quick_xml::{events::Event as XmlEvent, Reader};
 
 use crate::models::{
@@ -19,10 +28,13 @@ pub const MAX_SVG_PIXELS: f64 = 16_000_000.0;
 
 const SUPPORTED_PREFIXES: &[&str] = &[
     "flowchart",
+    "flowchart-elk",
+    "info",
     "graph",
     "swimlane-beta",
     "sequenceDiagram",
     "classDiagram",
+    "classDiagram-v2",
     "stateDiagram",
     "stateDiagram-v2",
     "erDiagram",
@@ -49,6 +61,14 @@ const SUPPORTED_PREFIXES: &[&str] = &[
     "eventmodeling",
     "treemap-beta",
     "venn-beta",
+    "ishikawa-beta",
+    "wardley-beta",
+    "cynefin-beta",
+    "treeView-beta",
+    "railroad-beta",
+    "railroad-ebnf-beta",
+    "railroad-abnf-beta",
+    "railroad-peg-beta",
 ];
 
 pub fn validate_sources(sources: &[DiagramSource]) -> Vec<DiagramDiagnostic> {
@@ -80,38 +100,49 @@ pub fn validate_sources(sources: &[DiagramSource]) -> Vec<DiagramDiagnostic> {
             ));
             continue;
         }
-        let trimmed = source.source_utf8.trim_start();
-        let lower_source = source.source_utf8.to_ascii_lowercase();
-        if trimmed.starts_with("---")
-            || lower_source.contains("http://")
-            || lower_source.contains("https://")
-            || lower_source.contains("data:")
-            || lower_source.contains("file:")
-            || lower_source.contains("icon:")
-            || lower_source.contains("img:")
-            || source.source_utf8.lines().any(|line| {
+        let body = match config_policy::body(&source.source_utf8) {
+            Ok(body) => body,
+            Err(message) => {
+                diagnostics.push(diagnostic(
+                    source,
+                    "DIAGRAM_UNSAFE_CONFIGURATION",
+                    &message,
+                    false,
+                ));
+                continue;
+            }
+        };
+        // URL text is not a resource request. Resource declarations remain rejected
+        // here; strict rendering, CSP and SVG validation guard the rendered output.
+        let statements = statements::split(&body);
+        if shape_policy::has_resource(&body)
+            || statements.iter().any(|line| {
                 let line = line.trim_start();
                 let lower = line.to_ascii_lowercase();
                 line.starts_with("%%{")
-                    || lower.starts_with("click ")
-                    || lower.starts_with("href ")
-                    || lower.starts_with("classdef ")
-                    || lower.starts_with("style ")
-                    || lower.starts_with("linkstyle ")
+                    || ["click", "href", "link", "links"].iter().any(|keyword| {
+                        lower
+                            .strip_prefix(keyword)
+                            .is_some_and(|tail| tail.starts_with(char::is_whitespace))
+                    })
+                    || (["classdef", "style", "linkstyle"].iter().any(|keyword| {
+                        lower
+                            .strip_prefix(keyword)
+                            .is_some_and(|tail| tail.starts_with(char::is_whitespace))
+                    }) && !style_policy::allowed(line))
             })
         {
             diagnostics.push(diagnostic(
                 source,
                 "DIAGRAM_UNSAFE_CONFIGURATION",
-                "Mermaid 文档不能覆盖配置、注册 click/href 或声明 front matter",
+                "Mermaid 包含未允许的资源、交互或样式声明",
                 false,
             ));
             continue;
         }
-        let first = source
-            .source_utf8
-            .lines()
-            .map(str::trim)
+        let first = statements
+            .iter()
+            .map(|statement| statement.trim())
             .find(|line| !line.is_empty() && !line.starts_with("%%"));
         if !first.is_some_and(is_supported_header) {
             diagnostics.push(diagnostic(
@@ -518,6 +549,96 @@ mod tests {
             accessible_description: None,
             warnings: Vec::new(),
         }
+    }
+
+    #[test]
+    fn accepts_url_text_labels() {
+        for text in [
+            r#"flowchart TD
+A["https://example.test/docs"] --> B["http://localhost"]"#,
+            "sequenceDiagram\nA->>B: https://example.test/docs",
+        ] {
+            assert!(validate_sources(&[source(text)]).is_empty(), "{text}");
+        }
+    }
+
+    #[test]
+    fn rejects_unsafe_semicolon_statements_but_preserves_label_text() {
+        for text in [
+            "flowchart TD; A-->B; click A callback",
+            "flowchart TD\nA-->B; style A fill:url(https://example.test/x)",
+            "flowchart TD\nA-->B; click\tA callback",
+        ] {
+            assert!(!validate_sources(&[source(text)]).is_empty(), "{text}");
+        }
+        let text = "flowchart TD; A[\"text; click A callback\"] --> B; style B fill:#fff";
+        assert!(validate_sources(&[source(text)]).is_empty());
+    }
+
+    #[test]
+    fn distinguishes_shape_resource_properties_from_labels() {
+        for text in [
+            "flowchart TD\nA[\"img: icon: https://example.test\"] --> B",
+            "flowchart TD\nA@{ shape: rect, label: \"img: text\" } --> B",
+        ] {
+            assert!(validate_sources(&[source(text)]).is_empty(), "{text}");
+        }
+        for text in [
+            "flowchart TD\nA@{ img : \"https://example.test/a.png\" }",
+            "flowchart TD\nA@{ \"img\": \"https://example.test/a.png\" }",
+            "flowchart TD\nA@{ icon : \"fa:user\" }",
+        ] {
+            assert!(!validate_sources(&[source(text)]).is_empty(), "{text}");
+        }
+    }
+
+    #[test]
+    fn rejects_external_resource_and_navigation_declarations() {
+        for text in [
+            "flowchart TD\nA@{ img: 'https://example.test/image.png' }",
+            "flowchart TD\nclick A href \"https://example.test\"",
+            "sequenceDiagram\nlink Alice: Docs @ https://example.test",
+            "sequenceDiagram\nlinks Alice: {\"Docs\": \"https://example.test\"}",
+            "flowchart TD\nstyle A fill:url(https://example.test/image.svg)",
+        ] {
+            let diagnostics = validate_sources(&[source(text)]);
+            assert_eq!(diagnostics.len(), 1, "{text}");
+            assert_eq!(diagnostics[0].code, "DIAGRAM_UNSAFE_CONFIGURATION");
+        }
+    }
+
+    #[test]
+    fn rejects_document_and_source_budgets_at_the_boundary() {
+        let sources = vec![source("flowchart TD\nA-->B"); 65];
+        let diagnostics = validate_sources(&sources);
+        assert_eq!(diagnostics.len(), 65);
+        assert!(diagnostics
+            .iter()
+            .all(|d| d.code == "DIAGRAM_DOCUMENT_LIMIT_EXCEEDED"));
+        assert!(validate_sources(&sources[..64]).is_empty());
+
+        let text = format!(
+            "flowchart TD\n%%{}",
+            "x".repeat(super::MAX_DIAGRAM_SOURCE_BYTES - 15)
+        );
+        assert_eq!(text.len(), super::MAX_DIAGRAM_SOURCE_BYTES);
+        assert!(validate_sources(&[source(&text)]).is_empty());
+        assert_eq!(
+            validate_sources(&[source(&(text.clone() + "x"))])[0].code,
+            "DIAGRAM_SOURCE_TOO_LARGE"
+        );
+        assert_eq!(
+            validate_sources(&vec![source(&text); 9])[0].code,
+            "DIAGRAM_DOCUMENT_LIMIT_EXCEEDED"
+        );
+        assert!(validate_sources(&vec![source(&text); 8]).is_empty());
+
+        let lines = format!("flowchart TD\n{}", "%% comment\n".repeat(3999));
+        assert!(validate_sources(&[source(&lines)]).is_empty());
+        assert_eq!(
+            validate_sources(&[source(&(lines + "%% extra"))])[0].code,
+            "DIAGRAM_SOURCE_TOO_LARGE"
+        );
     }
 
     #[test]

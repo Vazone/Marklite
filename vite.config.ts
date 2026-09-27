@@ -4,6 +4,8 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 export default defineConfig(async () => ({
   plugins: [svelte()],
   clearScreen: false,
+  // Preserve local dynamic language imports inside module workers.
+  worker: { format: 'es' },
   server: {
     port: 1420,
     strictPort: true,
