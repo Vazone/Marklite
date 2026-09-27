@@ -10,10 +10,13 @@ test('publishing promotes only after remote digests match; errors preserve stabl
   const directory = await mkdtemp(join(tmpdir(), 'marklite-publish-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const release = { version: '0.2.0', commit: 'a'.repeat(40), repository: 'Vazone/Marklite', notes: '中文\nEnglish', publishedAt: '2026-09-24T00:00:00Z' };
-  const names = ['latest.json', 'release-evidence.json', 'SHA256SUMS.txt'];
+  const names = ['latest.json', 'release-evidence.json', 'SHA256SUMS.txt',
+    'windows-x86_64.json', 'android-arm64.json', 'MarkLite_0.2.0_x64-setup.exe.release.json',
+    'MarkLite_0.2.0_x64-setup.exe.sig', 'MarkLite_0.2.0_x64-setup.exe', 'MarkLite_0.2.0_android_arm64.apk'];
+  const publicNames = ['latest.json', 'SHA256SUMS.txt', 'MarkLite_0.2.0_x64-setup.exe', 'MarkLite_0.2.0_android_arm64.apk'];
   for (const name of names) await writeFile(join(directory, name), JSON.stringify({ version: release.version }));
   const remote = [];
-  for (const name of names) {
+  for (const name of publicNames) {
     const digest = await artifactDigest(directory, name);
     remote.push({ name, size: digest.bytes, digest: `sha256:${digest.sha256}`, state: 'uploaded' });
   }
@@ -38,6 +41,8 @@ test('publishing promotes only after remote digests match; errors preserve stabl
     if (failure === 'verify') assert.equal(calls.length, 0);
     assert.equal(calls.filter(call => call.args.includes('PATCH')).length, failure ? 0 : 1, String(failure));
     if (!failure) {
+      const upload = calls.find(call => call.args[1] === 'upload');
+      assert.deepEqual(upload.args.slice(3, -2), publicNames.sort().map(name => join(directory, name)));
       assert.deepEqual(calls.at(-1).body, { draft: false, prerelease: false, make_latest: 'true' });
       assert.equal(calls.find(call => call.args.includes('POST')).body.body, release.notes);
     }

@@ -33,6 +33,7 @@ test('Android is required explicitly, tied to the source, checksummed, and exclu
   assert.equal(Object.keys(result.manifest.platforms).length, 4);
   assert.ok(result.evidence.downloads.some(d => d.name === name));
   assert.ok((await readFile(join(dir, 'SHA256SUMS.txt'), 'utf8')).includes(name));
+  assert.ok(!(await readFile(join(dir, 'SHA256SUMS.txt'), 'utf8')).includes('.json'));
   await assemble(release, dir, verify, { withAndroid: true, verifyExisting: true });
   await writeFile(join(dir, name), 'tampered APK');
   await assert.rejects(assemble(release, dir, verify, { withAndroid: true, verifyExisting: true }), /Android release artifact mismatch/);

@@ -10,6 +10,11 @@ export const updaterTargets = Object.freeze({
   'darwin-x86_64': { target: 'x86_64-apple-darwin', suffix: '_macos_x86_64.app.tar.gz' }
 });
 
+// Apply only after the complete staging directory has passed verification.
+export function isPublicAsset(name) {
+  return name === 'latest.json' || !/\.(?:json|sig)$/i.test(name);
+}
+
 export function validateRelease(release) {
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(release.version)) throw new Error('Expected stable x.y.z version');
   if (!/^[a-f0-9]{40}$/.test(release.commit)) throw new Error('Expected full source commit');

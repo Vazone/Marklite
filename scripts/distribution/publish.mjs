@@ -1,6 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { artifactDigest, validateRelease } from './manifest.mjs';
+import { artifactDigest, isPublicAsset, validateRelease } from './manifest.mjs';
 
 function newer(version, previous) {
   const left = version.split('.').map(BigInt);
@@ -29,8 +29,9 @@ export async function publish(release, directory, gh, verifyAssets) {
   await guard();
   const tags = JSON.parse(await gh(['api', `repos/${repo}/git/matching-refs/tags/${tag}`]));
   if (tags.some(item => item.ref === `refs/tags/${tag}`)) throw new Error('Tag already exists; use a new version');
-  const names = (await readdir(directory)).sort();
-  if (!names.includes('latest.json') || !names.includes('release-evidence.json') || !names.includes('SHA256SUMS.txt')) throw new Error('Missing assembled release metadata');
+  const staged = await readdir(directory);
+  if (!staged.includes('latest.json') || !staged.includes('release-evidence.json') || !staged.includes('SHA256SUMS.txt')) throw new Error('Missing assembled release metadata');
+  const names = staged.filter(isPublicAsset).sort();
   const assets = [];
   for (const name of names) assets.push({ name, ...await artifactDigest(directory, name) });
   const manifest = JSON.parse(await readFile(join(directory, 'latest.json'), 'utf8'));

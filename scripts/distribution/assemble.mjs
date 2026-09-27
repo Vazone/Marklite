@@ -1,6 +1,6 @@
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { artifactDigest, buildManifest, updaterTargets, validateRelease } from './manifest.mjs';
+import { artifactDigest, buildManifest, isPublicAsset, updaterTargets, validateRelease } from './manifest.mjs';
 
 export function downloadNames(platform, version) {
   const prefix = `MarkLite_${version}`;
@@ -48,7 +48,8 @@ export async function assemble(release, directory, verifySignature, { verifyExis
   for (const name of await readdir(directory)) if (!allowed.has(name)) throw new Error(`Unexpected release asset: ${name}`);
   const result = await buildManifest({ ...release, artifacts: records }, directory, verifySignature);
   result.evidence.downloads = downloads;
-  const checksums = [...result.evidence.artifacts, ...downloads].map(item => `${item.sha256}  ${item.name}`).sort().join('\n') + '\n';
+  const checksums = [...result.evidence.artifacts, ...downloads].filter(item => isPublicAsset(item.name))
+    .map(item => `${item.sha256}  ${item.name}`).sort().join('\n') + '\n';
   if (verifyExisting) {
     for (const [name, expected] of Object.entries({ 'latest.json': `${JSON.stringify(result.manifest, null, 2)}\n`,
       'release-evidence.json': `${JSON.stringify(result.evidence, null, 2)}\n`, 'SHA256SUMS.txt': checksums })) {

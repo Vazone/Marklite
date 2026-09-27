@@ -55,7 +55,9 @@ test('actual Tauri signatures verify; wrong key, modified payload and modified s
   const assembled = await assemble(release, assets, verify);
   assert.equal(Object.keys(assembled.manifest.platforms).length, 4);
   assert.equal(assembled.evidence.downloads.length, 5);
-  assert.equal((await readFile(join(assets, 'SHA256SUMS.txt'), 'utf8')).trim().split('\n').length, 9);
+  const checksums = (await readFile(join(assets, 'SHA256SUMS.txt'), 'utf8')).trim().split('\n');
+  assert.equal(checksums.length, 8);
+  assert.ok(checksums.every(line => !line.endsWith('.json') && !line.endsWith('.sig')));
   await assert.rejects(assemble(release, assets, verify), /Unexpected release asset/);
   await assemble(release, assets, verify, { verifyExisting: true });
   const manifestPath = join(assets, 'latest.json');
