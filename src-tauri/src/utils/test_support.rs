@@ -4,21 +4,28 @@ use std::{
 };
 
 pub struct TestDirectory {
-    inner: tempfile::TempDir,
+    _inner: tempfile::TempDir,
+    path: PathBuf,
 }
 
 impl TestDirectory {
     pub fn new(label: &str) -> Self {
+        let inner = tempfile::Builder::new()
+            .prefix(&format!("marklite-{label}-"))
+            .tempdir()
+            .expect("create isolated test directory");
+        // Windows runners may expose TEMP through an 8.3 alias. Fixtures and
+        // read hooks must use the same canonical identity as file operations.
+        let path = super::path_utils::canonicalize_path(inner.path())
+            .expect("canonicalize isolated test directory");
         Self {
-            inner: tempfile::Builder::new()
-                .prefix(&format!("marklite-{label}-"))
-                .tempdir()
-                .expect("create isolated test directory"),
+            _inner: inner,
+            path,
         }
     }
 
     pub fn path(&self) -> &Path {
-        self.inner.path()
+        &self.path
     }
 }
 
