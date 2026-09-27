@@ -26,7 +26,7 @@
 ## What's new in 0.1.7
 
 - **A folder workspace:** reopen your last directory, browse Markdown files in a collapsible tree, filter the list, and reveal a file in the desktop file manager.
-- **Android joins the project:** open documents from the system file picker or file manager, grant access to a directory, save changes, and export through Android's document provider.
+- **Android is now available:** open documents from the system file picker or file manager, grant access to a directory, save changes, and export through Android's document provider.
 - **More Markdown:** front matter, document tables of contents, footnotes, extended inline syntax, code highlighting, math, and Mermaid improvements.
 - **Safer writing:** recovery copies, external-change detection before overwriting, and better handling of recent and restored documents.
 - **Optional desktop updates:** background checks notify you of a new version; installation starts after your confirmation.
