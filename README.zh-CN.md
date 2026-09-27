@@ -50,7 +50,7 @@
 
 ARM64 APK 面向 Android 7.0 及以上（API 24）。文件和目录通过系统选择器授权访问，可用位置由 Android 权限和存储提供程序决定。竖屏布局避让系统栏，横屏提供更大的写作空间。最近文件、目录恢复、触控交互和导出复用编辑器核心能力。
 
-桌面自动更新和 Android APK 安装是不同机制：Android 下载 APK 后由系统安装。旧 debug 签名测试版可能需要先卸载，再安装正式签名包；请提前保存文档。
+桌面自动更新和 Android APK 安装是不同机制：Android 下载 APK 后由系统安装。旧测试版可能需要先卸载，再安装新版；请提前保存文档。
 
 
 ## 为什么选择 MarkLite？
@@ -159,7 +159,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked --all-features
 npm run package:windows
 ```
 
-CI 和 Release 仅手动触发。Actions 构建四个桌面目标及 Android ARM64 未签名 APK；APK 在维护者本机签名，全部产物核验后再发布。
+CI 和 Release 仅手动触发。Actions 构建四个桌面目标及 Android ARM64 APK。
 
 ### 构建 Android
 
@@ -171,7 +171,7 @@ npm ci
 npm run android:build -- --target aarch64 --debug
 ```
 
-本地测试 APK 输出到 `release/android/arm64/`。手动 Release 工作流输出未签名的优化 APK，由维护者本机签名后发布；私钥不会上传 Actions。
+本地测试 APK 输出到 `release/android/arm64/`。安装用 APK 请从 Releases 页面下载。
 
 ## 参与贡献
 

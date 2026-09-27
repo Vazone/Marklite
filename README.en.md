@@ -50,7 +50,7 @@
 
 The ARM64 APK targets Android 7.0+ (API 24). File and folder access uses the system document picker; Android permissions and storage providers determine which locations are available. Portrait layout respects system bars; landscape provides more writing space. Recent files, directory restoration, touch gestures, and export share the editor's core capabilities.
 
-Desktop application updates and Android APK installation use different mechanisms: the APK is downloaded and installed through Android. An older debug-signed build may need to be uninstalled before installing the release-signed APK; save your documents first.
+Desktop application updates and Android APK installation use different mechanisms: the APK is downloaded and installed through Android. An older test build may need to be uninstalled before installing this version; save your documents first.
 
 
 ## Why MarkLite?
@@ -159,7 +159,7 @@ Build the verified Windows NSIS package:
 npm run package:windows
 ```
 
-CI and Release workflows run only when manually dispatched. Release builds Windows x64, Linux x64, macOS Apple Silicon/Intel, and an ARM64 Android APK. The APK is signed locally before the complete release is published. Android private keys are never uploaded to Actions.
+CI and Release workflows run only when manually dispatched. Release builds Windows x64, Linux x64, macOS Apple Silicon/Intel, and an ARM64 Android APK.
 
 
 ### Build Android
@@ -172,7 +172,7 @@ npm ci
 npm run android:build -- --target aarch64 --debug
 ```
 
-Local test APKs are written to `release/android/arm64/`. The manual Release workflow produces an unsigned optimized APK for local signing by the maintainer.
+Local test APKs are written to `release/android/arm64/`. Download the APK for installation from the Releases page.
 
 ## Contributing
 
